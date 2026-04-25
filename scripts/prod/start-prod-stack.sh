@@ -47,6 +47,19 @@ Options:
 USAGE
 }
 
+validate_opencv_contract() {
+  if [[ "$OPENCV_ENABLED" != "true" ]]; then
+    return
+  fi
+
+  if [[ -n "${OPENCV_WORKER_URL:-}" || -n "${OPENCV_WORKER_COMMAND:-}" ]]; then
+    return
+  fi
+
+  echo "ERROR: --with-opencv requires OPENCV_WORKER_URL or OPENCV_WORKER_COMMAND in $ENV_FILE"
+  exit 1
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --with-opencv)
@@ -97,6 +110,8 @@ echo "RUNTIME_ROOT=$RUNTIME_ROOT"
 echo "COMPOSE_PROJECT=$COMPOSE_PROJECT"
 echo "APP_PORT=$APP_PORT"
 echo "OPENCV_ENABLED=$OPENCV_ENABLED"
+
+validate_opencv_contract
 
 export ANIMO_BEE_RUNTIME_ROOT="$RUNTIME_ROOT"
 export ANIMO_BEE_APP_PORT="$APP_PORT"

@@ -191,6 +191,50 @@ function normalizeDecisionResult(result, fallbackDecision) {
   };
 }
 
+function normalizeMetadataObject(metadata) {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
+    return {};
+  }
+
+  return metadata;
+}
+
+function mergeClipMetadata(existingMetadata, updates) {
+  const baseMetadata = normalizeMetadataObject(existingMetadata);
+  const nextMetadata = { ...baseMetadata };
+
+  Object.entries(normalizeMetadataObject(updates)).forEach(([key, value]) => {
+    if (
+      value &&
+      typeof value === "object" &&
+      !Array.isArray(value) &&
+      nextMetadata[key] &&
+      typeof nextMetadata[key] === "object" &&
+      !Array.isArray(nextMetadata[key])
+    ) {
+      nextMetadata[key] = {
+        ...nextMetadata[key],
+        ...value,
+      };
+      return;
+    }
+
+    nextMetadata[key] = value;
+  });
+
+  return nextMetadata;
+}
+
+function getUploadAttemptBaseCount(metadata) {
+  const baseCount = normalizeMetadataObject(metadata).upload?.attemptBaseCount;
+
+  if (Number.isInteger(baseCount) && baseCount >= 0) {
+    return baseCount;
+  }
+
+  return 0;
+}
+
 export function assertClipTransition(currentStatus, nextStatus) {
   if (!CLIP_STATES.includes(nextStatus)) {
     throw new Error(`Unknown clip status: ${nextStatus}`);
@@ -434,6 +478,20 @@ export class QueueManager {
     return row?.total ?? 0;
   }
 
+  getUploadAttemptBudgetCount(clipId) {
+    const clip = this.getClipById(clipId);
+
+    if (!clip) {
+      throw new Error(`Clip not found: ${clipId}`);
+    }
+
+    return Math.max(
+      this.getUploadAttemptCount(clipId) -
+        getUploadAttemptBaseCount(clip.metadata),
+      0,
+    );
+  }
+
   listUploadAttempts(clipId) {
     return this.getRows(
       `
@@ -588,6 +646,23 @@ export class QueueManager {
       },
     );
 
+    this.getRows(this.clipSelectSql("WHERE status = 'accepted'")).forEach(
+      (row) => {
+        const clip = normalizeClip(row);
+        const recoveredAt = nowIso();
+
+        this.run(
+          "UPDATE clips SET status = 'queued', queued_at = $queuedAt, updated_at = $updatedAt WHERE id = $id",
+          {
+            $id: clip.id,
+            $queuedAt: clip.queuedAt ?? recoveredAt,
+            $updatedAt: recoveredAt,
+          },
+        );
+        changed = true;
+      },
+    );
+
     if (changed) {
       await this.persist();
     }
@@ -685,9 +760,16 @@ export class QueueManager {
       );
     }
 
+    const metadata = mergeClipMetadata(clip.metadata, {
+      upload: {
+        attemptBaseCount: this.getUploadAttemptCount(clip.id),
+      },
+    });
+
     return this.transitionClip(clipId, "queued", {
       queuedAt: nowIso(),
       failureReason: null,
+      metadataJson: serializeJson(metadata),
     });
   }
 

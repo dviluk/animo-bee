@@ -240,3 +240,65 @@ test("processClip marks clip exhausted when max attempts are already reached", a
   });
   assert.equal(fetchCalled, false);
 });
+
+test("processClip honors manual retry budget resets", async (t) => {
+  const runtimeRoot = await fs.mkdtemp(path.join(os.tmpdir(), "animo-bee-up-"));
+  const clipPath = path.join(runtimeRoot, "clip-manual-retry.mp4");
+
+  await fs.writeFile(clipPath, "retry-window", "utf8");
+
+  t.after(async () => {
+    await fs.rm(runtimeRoot, { force: true, recursive: true });
+  });
+
+  const attempts = [];
+  let fetchCalled = false;
+
+  const queueManager = {
+    getUploadAttemptBudgetCount: () => 0,
+    getUploadAttemptCount: () => 3,
+    markUploading: async (clipId) => ({
+      id: clipId,
+      currentPath: clipPath,
+      sourceCamera: "camera_1",
+      checksum: "checksum-44",
+      status: "uploading",
+    }),
+    recordUploadAttempt: async (_clipId, attempt) => {
+      attempts.push(attempt);
+    },
+    completeUpload: async (clipId) => ({
+      id: clipId,
+      status: "uploaded",
+      currentPath: path.join(runtimeRoot, "processed", "clip-manual-retry.mp4"),
+    }),
+  };
+
+  const worker = new UploadWorker(buildConfig(), queueManager, {
+    fetch: async () => {
+      fetchCalled = true;
+      return {
+        ok: true,
+        status: 202,
+      };
+    },
+  });
+
+  const result = await worker.processClip({
+    id: 44,
+    currentPath: clipPath,
+    sourceCamera: "camera_1",
+    checksum: "checksum-44",
+  });
+
+  assert.equal(fetchCalled, true);
+  assert.equal(result.status, "uploaded");
+  assert.equal(result.attemptNumber, 1);
+  assert.equal(result.responseStatus, 202);
+  assert.deepEqual(attempts, [
+    {
+      attemptNumber: 1,
+      responseStatus: 202,
+    },
+  ]);
+});

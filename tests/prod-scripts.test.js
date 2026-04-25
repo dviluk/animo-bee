@@ -236,7 +236,11 @@ test("start-prod-stack.sh enables the optional OpenCV profile", async () => {
 
   await Promise.all([
     fs.writeFile(composeFile, "services: {}\n", "utf8"),
-    fs.writeFile(envFile, "APP_MODE=production\n", "utf8"),
+    fs.writeFile(
+      envFile,
+      "APP_MODE=production\nOPENCV_WORKER_URL=http://127.0.0.1:9999/decision\n",
+      "utf8",
+    ),
     writeExecutable(
       path.join(fakeBin, "docker"),
       `#!/usr/bin/env bash
@@ -282,6 +286,38 @@ exit 0
 
   await fs.stat(path.join(runtimeRoot, "data", "camera_1"));
   await fs.stat(path.join(runtimeRoot, "db", "integration.sqlite"));
+});
+
+test("start-prod-stack.sh rejects OpenCV profile without worker contract", async () => {
+  const runtimeRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "animo-bee-prod-"),
+  );
+  const fakeBin = await createFakeToolchain("motioneye-present");
+  const composeFile = path.join(runtimeRoot, "docker-compose.prod.yml");
+  const envFile = path.join(runtimeRoot, "stack.env");
+
+  await Promise.all([
+    fs.writeFile(composeFile, "services: {}\n", "utf8"),
+    fs.writeFile(envFile, "APP_MODE=production\n", "utf8"),
+  ]);
+
+  const result = runScript(START_PROD_STACK_SCRIPT, {
+    args: ["--with-opencv", "--no-build"],
+    env: {
+      PATH: `${fakeBin}:${process.env.PATH}`,
+      ANIMO_BEE_PROD_COMPOSE_FILE: composeFile,
+      ANIMO_BEE_ENV_FILE: envFile,
+      ANIMO_BEE_RUNTIME_ROOT: runtimeRoot,
+      ANIMO_BEE_DB_FILE: "integration.sqlite",
+      ANIMO_BEE_SKIP_MOUNT_CHECK: "1",
+    },
+  });
+
+  assert.equal(result.status, 1);
+  assert.match(
+    `${result.stdout}${result.stderr}`,
+    /requires OPENCV_WORKER_URL or OPENCV_WORKER_COMMAND/,
+  );
 });
 
 test("stop-prod-stack.sh forwards volume cleanup option", async () => {

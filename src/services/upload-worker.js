@@ -138,7 +138,10 @@ export class UploadWorker {
   }
 
   async processClip(clip) {
-    const previousAttempts = this.queueManager.getUploadAttemptCount(clip.id);
+    const previousAttempts =
+      typeof this.queueManager.getUploadAttemptBudgetCount === "function"
+        ? this.queueManager.getUploadAttemptBudgetCount(clip.id)
+        : this.queueManager.getUploadAttemptCount(clip.id);
 
     if (previousAttempts >= this.config.maxAttempts) {
       const failedClip = await this.queueManager.failClip(

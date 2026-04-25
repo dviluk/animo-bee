@@ -155,6 +155,11 @@ test("recoverPendingWork resets processing and uploading states", async (t) => {
     "clip-uploading.mp4",
     "bbbb",
   );
+  const clipC = await createClipEvent(
+    runtime.camera1,
+    "clip-accepted.mp4",
+    "cccc",
+  );
 
   const { clip: processingClip } = await queueManager.enqueueClip(clipA.event, {
     checksum: "processing",
@@ -164,6 +169,10 @@ test("recoverPendingWork resets processing and uploading states", async (t) => {
     checksum: "uploading",
     opencvEnabled: false,
   });
+  const { clip: acceptedClip } = await queueManager.enqueueClip(clipC.event, {
+    checksum: "accepted",
+    opencvEnabled: true,
+  });
 
   await queueManager.markProcessing(processingClip.id);
   const queuedClip = await queueManager.acceptClip(uploadingClip.id, {
@@ -172,19 +181,30 @@ test("recoverPendingWork resets processing and uploading states", async (t) => {
   });
   assert.equal(queuedClip.status, "queued");
   await queueManager.transitionClip(uploadingClip.id, "uploading");
+  await queueManager.transitionClip(acceptedClip.id, "accepted", {
+    decision: "accepted",
+    decisionReason: "recovered after restart",
+  });
 
   const resumable = await queueManager.recoverPendingWork();
   const recoveredProcessing = queueManager.getClipById(processingClip.id);
   const recoveredUploading = queueManager.getClipById(uploadingClip.id);
+  const recoveredAccepted = queueManager.getClipById(acceptedClip.id);
 
   assert.equal(recoveredProcessing.status, "ready");
   assert.equal(recoveredUploading.status, "queued");
+  assert.equal(recoveredAccepted.status, "queued");
+  assert.equal(recoveredAccepted.queuedAt !== null, true);
   assert.equal(
     resumable.some((clip) => clip.id === processingClip.id),
     true,
   );
   assert.equal(
     resumable.some((clip) => clip.id === uploadingClip.id),
+    true,
+  );
+  assert.equal(
+    resumable.some((clip) => clip.id === acceptedClip.id),
     true,
   );
 });
@@ -345,12 +365,25 @@ test("retryFailedUpload only allows failed clips and clears failure reason", asy
     opencvEnabled: false,
   });
 
+  await queueManager.recordUploadAttempt(clip.id, {
+    attemptNumber: 1,
+    responseStatus: 500,
+    errorSummary: "first failure",
+  });
+  await queueManager.recordUploadAttempt(clip.id, {
+    attemptNumber: 2,
+    responseStatus: 502,
+    errorSummary: "second failure",
+  });
   await queueManager.failClip(clip.id, new Error("network timeout"));
 
   const retriedClip = await queueManager.retryFailedUpload(clip.id);
 
   assert.equal(retriedClip.status, "queued");
   assert.equal(retriedClip.failureReason, null);
+  assert.equal(retriedClip.metadata.upload.attemptBaseCount, 2);
+  assert.equal(queueManager.getUploadAttemptCount(clip.id), 2);
+  assert.equal(queueManager.getUploadAttemptBudgetCount(clip.id), 0);
 
   await assert.rejects(
     () => queueManager.retryFailedUpload(retriedClip.id),
