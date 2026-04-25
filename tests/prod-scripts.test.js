@@ -203,7 +203,7 @@ test("healthcheck.sh fails when motionEye is absent", async () => {
   assert.match(`${result.stdout}${result.stderr}`, /motionEye is not detected/);
 });
 
-test("healthcheck.sh succeeds when motionEye is active", async () => {
+test("healthcheck.sh fails when compose file is absent", async () => {
   const runtimeRoot = await prepareRuntimeRoot();
   const fakeBin = await createFakeToolchain("motioneye-present");
 
@@ -217,11 +217,8 @@ test("healthcheck.sh succeeds when motionEye is active", async () => {
     },
   });
 
-  assert.equal(result.status, 0);
-  assert.match(
-    result.stdout,
-    /Healthcheck completed without blocking failures\./,
-  );
+  assert.equal(result.status, 1);
+  assert.match(`${result.stdout}${result.stderr}`, /Production compose file not found/);
 });
 
 test("start-prod-stack.sh enables the optional OpenCV profile", async () => {

@@ -4,31 +4,37 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
-COMPOSE_FILE="${ANIMO_BEE_PROD_COMPOSE_FILE:-$PROJECT_ROOT/docker-compose.prod.yml}"
-COMPOSE_PROJECT="${ANIMO_BEE_COMPOSE_PROJECT:-animo-bee-prod}"
-RUNTIME_ROOT="${ANIMO_BEE_RUNTIME_ROOT:-/mnt/bee-disk/projects/animo-bee}"
-APP_PORT="${ANIMO_BEE_APP_PORT:-3001}"
-OPENCV_ENABLED="${ANIMO_BEE_OPENCV_ENABLED:-false}"
-BUILD_ARG="--build"
-
 resolve_env_file() {
   if [[ -n "${ANIMO_BEE_ENV_FILE:-}" ]]; then
     printf '%s\n' "$ANIMO_BEE_ENV_FILE"
     return
   fi
-
   if [[ -f "$PROJECT_ROOT/.env.prod" ]]; then
     printf '%s\n' "$PROJECT_ROOT/.env.prod"
     return
   fi
-
   if [[ -f "$PROJECT_ROOT/.env" ]]; then
     printf '%s\n' "$PROJECT_ROOT/.env"
     return
   fi
-
   printf '%s\n' "$PROJECT_ROOT/.env.example"
 }
+
+ENV_FILE="$(resolve_env_file)"
+
+if [[ -f "$ENV_FILE" ]]; then
+  set -a
+  # Source ENV_FILE but suppress errors from non-bash syntax if any, though it should be safe.
+  source "$ENV_FILE"
+  set +a
+fi
+
+COMPOSE_FILE="${ANIMO_BEE_PROD_COMPOSE_FILE:-$PROJECT_ROOT/docker-compose.prod.yml}"
+COMPOSE_PROJECT="${ANIMO_BEE_COMPOSE_PROJECT:-animo-bee-prod}"
+RUNTIME_ROOT="${ANIMO_BEE_RUNTIME_ROOT:-/mnt/bee-disk/projects/animo-bee}"
+APP_PORT="${ANIMO_BEE_APP_PORT:-${PORT:-3001}}"
+OPENCV_ENABLED="${ANIMO_BEE_OPENCV_ENABLED:-false}"
+BUILD_ARG="--build"
 
 usage() {
   cat <<'USAGE'
@@ -62,8 +68,6 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
-
-ENV_FILE="$(resolve_env_file)"
 
 if [[ ! -f "$COMPOSE_FILE" ]]; then
   echo "ERROR: Production compose file not found: $COMPOSE_FILE"

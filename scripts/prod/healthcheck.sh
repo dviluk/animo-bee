@@ -138,7 +138,7 @@ check_compose_runtime() {
   fi
 
   if [[ ! -f "$PROD_COMPOSE_FILE" ]]; then
-    warn "Production compose file not found: $PROD_COMPOSE_FILE"
+    fail "Production compose file not found: $PROD_COMPOSE_FILE"
     return
   fi
 
@@ -164,14 +164,14 @@ check_compose_runtime() {
   running_services="$(docker compose "${compose_args[@]}" ps --services --status running 2>/dev/null || true)"
 
   if [[ -z "$running_services" ]]; then
-    warn "No running services found for $PROD_COMPOSE_FILE"
+    fail "No running services found for $PROD_COMPOSE_FILE"
     return
   fi
 
   if grep -qx "app" <<<"$running_services"; then
     pass "Production app service is running."
   else
-    warn "Production app service is not running."
+    fail "Production app service is not running."
   fi
 
   if [[ "$OPENCV_ENABLED" == "true" ]]; then
@@ -195,7 +195,7 @@ check_local_health_endpoint() {
   if curl -fsS "$HEALTH_URL" >/dev/null 2>&1; then
     pass "Local health endpoint responded: $HEALTH_URL"
   else
-    warn "Local health endpoint did not respond: $HEALTH_URL"
+    fail "Local health endpoint did not respond: $HEALTH_URL"
   fi
 }
 
