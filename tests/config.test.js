@@ -17,6 +17,17 @@ const ENV_KEYS = [
   "DB_PATH",
   "LOG_DIR",
   "OPENCV_ENABLED",
+  "OPENCV_MODE",
+  "OPENCV_FAIL_OPEN",
+  "OPENCV_RETAIN_REJECTED_FILES",
+  "OPENCV_ROI_CONFIG_PATH",
+  "OPENCV_MIN_MOTION_DURATION_MS",
+  "OPENCV_MAX_BRIGHTNESS_CHANGE",
+  "OPENCV_MIN_ROI_MOTION_SCORE",
+  "OPENCV_WORKER_COMMAND",
+  "OPENCV_WORKER_ARGS",
+  "OPENCV_WORKER_URL",
+  "OPENCV_TIMEOUT_MS",
   "UPLOAD_ENABLED",
   "UPLOAD_URL",
   "UPLOAD_HEADERS_JSON",
@@ -74,6 +85,12 @@ test("loadConfig resolves the default development paths", async () => {
       path.resolve(process.cwd(), "runtime/db/orchestrator.sqlite"),
     );
     assert.equal(config.features.opencvEnabled, false);
+    assert.equal(config.opencv.mode, "disabled");
+    assert.equal(config.opencv.failOpen, true);
+    assert.equal(config.opencv.retainRejectedFiles, true);
+    assert.equal(config.opencv.minMotionDurationMs, 500);
+    assert.equal(config.opencv.maxBrightnessChange, 0.25);
+    assert.equal(config.opencv.minRoiMotionScore, 0.4);
     assert.equal(config.features.uploadEnabled, false);
     assert.equal(config.features.irrigationEnabled, false);
     assert.equal(config.upload.enabled, false);
@@ -103,6 +120,13 @@ test("loadConfig respects explicit runtime overrides", async () => {
       DB_PATH: "/tmp/orchestrator.sqlite",
       LOG_DIR: "/tmp/logs",
       OPENCV_ENABLED: "true",
+      OPENCV_MODE: "shadow",
+      OPENCV_FAIL_OPEN: "false",
+      OPENCV_RETAIN_REJECTED_FILES: "false",
+      OPENCV_ROI_CONFIG_PATH: "/tmp/opencv-roi.json",
+      OPENCV_MIN_MOTION_DURATION_MS: "750",
+      OPENCV_MAX_BRIGHTNESS_CHANGE: "0.2",
+      OPENCV_MIN_ROI_MOTION_SCORE: "0.6",
       UPLOAD_ENABLED: "true",
       UPLOAD_URL: "https://example.test/upload",
       UPLOAD_HEADERS_JSON: '{"x-api-key":"token"}',
@@ -130,6 +154,13 @@ test("loadConfig respects explicit runtime overrides", async () => {
       assert.equal(config.paths.dbPath, "/tmp/orchestrator.sqlite");
       assert.equal(config.paths.logDir, "/tmp/logs");
       assert.equal(config.features.opencvEnabled, true);
+      assert.equal(config.opencv.mode, "shadow");
+      assert.equal(config.opencv.failOpen, false);
+      assert.equal(config.opencv.retainRejectedFiles, false);
+      assert.equal(config.opencv.roiConfigPath, "/tmp/opencv-roi.json");
+      assert.equal(config.opencv.minMotionDurationMs, 750);
+      assert.equal(config.opencv.maxBrightnessChange, 0.2);
+      assert.equal(config.opencv.minRoiMotionScore, 0.6);
       assert.equal(config.features.uploadEnabled, true);
       assert.equal(config.features.irrigationEnabled, true);
       assert.equal(config.upload.enabled, true);
@@ -152,9 +183,25 @@ test("loadConfig respects explicit runtime overrides", async () => {
   );
 });
 
+test("loadConfig maps legacy OPENCV_ENABLED=true to shadow mode", async () => {
+  await withEnv({ OPENCV_ENABLED: "true" }, async () => {
+    const config = loadConfig();
+
+    assert.equal(config.features.opencvEnabled, true);
+    assert.equal(config.opencv.enabled, true);
+    assert.equal(config.opencv.mode, "shadow");
+  });
+});
+
 test("loadConfig rejects invalid port values", async () => {
   await withEnv({ PORT: "invalid" }, async () => {
     assert.throws(() => loadConfig(), /Invalid PORT value: invalid/);
+  });
+});
+
+test("loadConfig rejects invalid OpenCV mode values", async () => {
+  await withEnv({ OPENCV_MODE: "invalid" }, async () => {
+    assert.throws(() => loadConfig(), /Invalid OPENCV_MODE value: invalid/);
   });
 });
 

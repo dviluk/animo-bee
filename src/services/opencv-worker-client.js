@@ -1,6 +1,20 @@
 import { spawn } from "node:child_process";
 
-export const OPENCV_DECISIONS = Object.freeze(["accepted", "rejected"]);
+const DECISION_ALIASES = Object.freeze({
+  accepted: "accept",
+  rejected: "reject",
+  accept: "accept",
+  reject: "reject",
+  maybe: "maybe",
+});
+
+const ROUTE_DECISION_MAP = Object.freeze({
+  accept: "accepted",
+  reject: "rejected",
+  maybe: "accepted",
+});
+
+export const OPENCV_DECISIONS = Object.freeze(Object.keys(DECISION_ALIASES));
 
 const DEFAULT_TIMEOUT_MS = 30000;
 
@@ -12,18 +26,49 @@ function normalizeMetadata(metadata) {
   return metadata;
 }
 
-export function normalizeWorkerResult(result) {
-  const parsedResult = typeof result === "string" ? JSON.parse(result) : result;
-  const decision = parsedResult?.decision;
-
-  if (!OPENCV_DECISIONS.includes(decision)) {
-    throw new Error(`Invalid OpenCV worker decision: ${decision}`);
+function normalizeOpenCvDecision(decision) {
+  if (typeof decision !== "string") {
+    return null;
   }
 
+  return DECISION_ALIASES[decision] ?? null;
+}
+
+function normalizeScores(scores) {
+  if (!scores || typeof scores !== "object" || Array.isArray(scores)) {
+    return {};
+  }
+
+  const normalized = {};
+
+  Object.entries(scores).forEach(([key, value]) => {
+    if (typeof value === "number" && Number.isFinite(value)) {
+      normalized[key] = value;
+    }
+  });
+
+  return normalized;
+}
+
+export function normalizeWorkerResult(result) {
+  const parsedResult = typeof result === "string" ? JSON.parse(result) : result;
+  const normalizedDecision = normalizeOpenCvDecision(parsedResult?.decision);
+
+  if (!normalizedDecision) {
+    throw new Error(
+      `Invalid OpenCV worker decision: ${parsedResult?.decision}`,
+    );
+  }
+
+  const metadata = normalizeMetadata(parsedResult?.metadata);
+  const scores = normalizeScores(parsedResult?.scores ?? metadata?.scores);
+
   return {
-    decision,
-    reason: parsedResult.reason ?? null,
-    metadata: normalizeMetadata(parsedResult.metadata),
+    decision: ROUTE_DECISION_MAP[normalizedDecision],
+    opencvDecision: normalizedDecision,
+    reason: parsedResult?.reason ?? null,
+    metadata,
+    scores,
   };
 }
 
@@ -100,8 +145,16 @@ async function collectProcessResult(child, payload, timeoutMs) {
 export class OpenCvWorkerClient {
   constructor(config, options = {}) {
     const opencvConfig = config.opencv ?? {};
+    const configuredEnabled = options.enabled ?? config.features.opencvEnabled;
 
-    this.enabled = options.enabled ?? config.features.opencvEnabled;
+    this.mode =
+      options.mode ??
+      opencvConfig.mode ??
+      (configuredEnabled ? "shadow" : "disabled");
+    this.enabled = this.mode !== "disabled";
+    this.failOpen = options.failOpen ?? opencvConfig.failOpen ?? true;
+    this.retainRejectedFiles =
+      options.retainRejectedFiles ?? opencvConfig.retainRejectedFiles ?? true;
     this.workerCommand =
       options.workerCommand ?? opencvConfig.workerCommand ?? null;
     this.workerArgs = options.workerArgs ?? opencvConfig.workerArgs ?? [];
@@ -110,12 +163,34 @@ export class OpenCvWorkerClient {
       options.timeoutMs ?? opencvConfig.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   }
 
+  applyRuntimeConfig(runtime = {}) {
+    if (runtime.mode) {
+      this.mode = runtime.mode;
+    }
+
+    if (typeof runtime.enabled === "boolean") {
+      this.enabled = runtime.enabled;
+    } else {
+      this.enabled = this.mode !== "disabled";
+    }
+
+    if (typeof runtime.failOpen === "boolean") {
+      this.failOpen = runtime.failOpen;
+    }
+
+    if (typeof runtime.retainRejectedFiles === "boolean") {
+      this.retainRejectedFiles = runtime.retainRejectedFiles;
+    }
+  }
+
   async decideClip(clip) {
-    if (!this.enabled) {
+    if (this.mode === "disabled" || !this.enabled) {
       return {
         decision: "accepted",
-        reason: "opencv disabled",
+        opencvDecision: "accept",
+        reason: "opencv_disabled",
         metadata: { skipped: true },
+        scores: {},
       };
     }
 

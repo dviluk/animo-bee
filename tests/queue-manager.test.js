@@ -437,3 +437,50 @@ test("getQueueSummary aggregates queue and failed counts", async (t) => {
   assert.equal(summary.pendingUploads, 1);
   assert.equal(summary.failed, 1);
 });
+
+test("failClip persists OpenCV lifecycle updates when provided", async (t) => {
+  const runtime = await createRuntimeConfig();
+  const queueManager = await createQueueManager(runtime.config);
+
+  t.after(async () => {
+    await queueManager.close();
+    await fs.rm(runtime.root, { force: true, recursive: true });
+  });
+
+  const { event } = await createClipEvent(
+    runtime.camera1,
+    "clip-opencv-error.mp4",
+    "opencv",
+  );
+
+  const { clip } = await queueManager.enqueueClip(event, {
+    checksum: "opencv-error",
+    opencvEnabled: true,
+    opencvMode: "shadow",
+  });
+
+  await queueManager.markProcessing(clip.id);
+
+  const processedAt = new Date().toISOString();
+  const failedClip = await queueManager.failClip(
+    clip.id,
+    new Error("opencv worker crashed"),
+    {
+      opencvMode: "shadow",
+      opencvStatus: "failed",
+      opencvDecision: "maybe",
+      opencvReason: "opencv_error",
+      opencvError: "opencv worker crashed",
+      opencvProcessedAt: processedAt,
+    },
+  );
+
+  assert.equal(failedClip.status, "failed");
+  assert.equal(failedClip.failureReason, "opencv worker crashed");
+  assert.equal(failedClip.opencvMode, "shadow");
+  assert.equal(failedClip.opencvStatus, "failed");
+  assert.equal(failedClip.opencvDecision, "maybe");
+  assert.equal(failedClip.opencvReason, "opencv_error");
+  assert.equal(failedClip.opencvError, "opencv worker crashed");
+  assert.equal(failedClip.opencvProcessedAt, processedAt);
+});

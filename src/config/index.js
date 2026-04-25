@@ -6,7 +6,11 @@ dotenv.config();
 
 const DEFAULT_HOST = "0.0.0.0";
 const DEFAULT_PORT = 3001;
+const OPENCV_MODES = new Set(["disabled", "shadow", "enforce"]);
 const DEFAULT_OPENCV_TIMEOUT_MS = 30000;
+const DEFAULT_OPENCV_MIN_MOTION_DURATION_MS = 500;
+const DEFAULT_OPENCV_MAX_BRIGHTNESS_CHANGE = 0.25;
+const DEFAULT_OPENCV_MIN_ROI_MOTION_SCORE = 0.4;
 const DEFAULT_UPLOAD_MAX_ATTEMPTS = 3;
 const DEFAULT_UPLOAD_POLL_INTERVAL_MS = 5000;
 const DEFAULT_UPLOAD_RETRY_DELAY_MS = 30000;
@@ -19,6 +23,7 @@ const DEFAULT_PATHS = {
   rejected: "./runtime/rejected",
   database: "./runtime/db/orchestrator.sqlite",
   logs: "./runtime/logs",
+  opencvRoiConfig: "./config/opencv-roi.example.json",
 };
 
 function parsePort(rawPort) {
@@ -47,6 +52,28 @@ function parseBoolean(rawValue, defaultValue = false) {
   }
 
   return rawValue === "true";
+}
+
+function parseOpenCvMode(rawValue) {
+  if (!rawValue) {
+    throw new Error("Missing OPENCV_MODE value.");
+  }
+
+  if (OPENCV_MODES.has(rawValue)) {
+    return rawValue;
+  }
+
+  throw new Error(`Invalid OPENCV_MODE value: ${rawValue}`);
+}
+
+function parseDecimal(rawValue, defaultValue, name) {
+  const value = Number.parseFloat(rawValue ?? `${defaultValue}`);
+
+  if (Number.isFinite(value)) {
+    return value;
+  }
+
+  throw new Error(`Invalid ${name} value: ${rawValue}`);
 }
 
 function parseHeaderJson(rawHeaders, name) {
@@ -94,7 +121,11 @@ function resolvePath(inputPath) {
 }
 
 export function loadConfig() {
-  const opencvEnabled = parseBoolean(process.env.OPENCV_ENABLED);
+  const opencvToggle = parseBoolean(process.env.OPENCV_ENABLED);
+  const opencvMode = parseOpenCvMode(
+    process.env.OPENCV_MODE ?? (opencvToggle ? "shadow" : "disabled"),
+  );
+  const opencvEnabled = opencvMode !== "disabled";
   const uploadEnabled = parseBoolean(process.env.UPLOAD_ENABLED);
   const irrigationEnabled = parseBoolean(process.env.IRRIGATION_ENABLED);
 
@@ -125,6 +156,30 @@ export function loadConfig() {
     },
     opencv: {
       enabled: opencvEnabled,
+      mode: opencvMode,
+      failOpen: parseBoolean(process.env.OPENCV_FAIL_OPEN, true),
+      retainRejectedFiles: parseBoolean(
+        process.env.OPENCV_RETAIN_REJECTED_FILES,
+        true,
+      ),
+      roiConfigPath: resolvePath(
+        process.env.OPENCV_ROI_CONFIG_PATH ?? DEFAULT_PATHS.opencvRoiConfig,
+      ),
+      minMotionDurationMs: parsePositiveInteger(
+        process.env.OPENCV_MIN_MOTION_DURATION_MS,
+        DEFAULT_OPENCV_MIN_MOTION_DURATION_MS,
+        "OPENCV_MIN_MOTION_DURATION_MS",
+      ),
+      maxBrightnessChange: parseDecimal(
+        process.env.OPENCV_MAX_BRIGHTNESS_CHANGE,
+        DEFAULT_OPENCV_MAX_BRIGHTNESS_CHANGE,
+        "OPENCV_MAX_BRIGHTNESS_CHANGE",
+      ),
+      minRoiMotionScore: parseDecimal(
+        process.env.OPENCV_MIN_ROI_MOTION_SCORE,
+        DEFAULT_OPENCV_MIN_ROI_MOTION_SCORE,
+        "OPENCV_MIN_ROI_MOTION_SCORE",
+      ),
       workerCommand: process.env.OPENCV_WORKER_COMMAND ?? null,
       workerArgs: parseWorkerArgs(process.env.OPENCV_WORKER_ARGS),
       workerUrl: process.env.OPENCV_WORKER_URL ?? null,

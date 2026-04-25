@@ -428,6 +428,7 @@ fi
 
 if [[ "$1" == "compose" && "$*" == *" ps "* ]]; then
   echo "app"
+  echo "opencv-worker"
   exit 0
 fi
 
@@ -448,7 +449,7 @@ if [[ "$url" == *"/queue" ]]; then
   exit 0
 fi
 
-echo '{"data":{"status":"ok","service":"animo-bee","queue":{"total":0},"upload":{"running":false}}}'
+echo '{"data":{"status":"ok","service":"animo-bee","opencv":{"mode":"shadow","enabled":true,"failOpen":true,"retainRejectedFiles":true},"queue":{"total":0},"upload":{"running":false}}}'
 exit 0
 `,
     ),
@@ -461,16 +462,83 @@ exit 0
       ANIMO_BEE_DB_PATH: path.join(runtimeRoot, "db", "orchestrator.sqlite"),
       ANIMO_BEE_PROD_COMPOSE_FILE: composeFile,
       ANIMO_BEE_HEALTH_URL: "http://127.0.0.1:3001/health",
+      OPENCV_MODE: "shadow",
     },
   });
 
   assert.equal(result.status, 0);
+  assert.match(result.stdout, /OpenCV mode is valid: shadow/);
+  assert.match(result.stdout, /reports OpenCV mode shadow/);
+  assert.match(result.stdout, /includes OpenCV failOpen status/);
+  assert.match(result.stdout, /includes OpenCV retainRejectedFiles status/);
   assert.match(result.stdout, /Local health endpoint includes queue summary/);
   assert.match(
     result.stdout,
     /Local health endpoint includes upload worker status/,
   );
   assert.match(result.stdout, /Local queue endpoint exposes summary and clips/);
+});
+
+test("healthcheck.sh fails when OpenCV mode does not match health payload", async () => {
+  const runtimeRoot = await prepareRuntimeRoot();
+  const fakeBin = await createFakeToolchain("motioneye-present");
+  const composeFile = path.join(runtimeRoot, "docker-compose.prod.yml");
+
+  await Promise.all([
+    fs.writeFile(composeFile, "services: {}\n", "utf8"),
+    writeExecutable(
+      path.join(fakeBin, "docker"),
+      `#!/usr/bin/env bash
+if [[ "$1" == "compose" && "$2" == "version" ]]; then
+  echo "Docker Compose version v2.0.0"
+  exit 0
+fi
+
+if [[ "$1" == "compose" && "$*" == *" ps "* ]]; then
+  echo "app"
+  echo "opencv-worker"
+  exit 0
+fi
+
+if [[ "$1" == "compose" ]]; then
+  exit 0
+fi
+
+exit 0
+`,
+    ),
+    writeExecutable(
+      path.join(fakeBin, "curl"),
+      `#!/usr/bin/env bash
+url="\${@: -1}"
+
+if [[ "$url" == *"/queue" ]]; then
+  echo '{"data":{"summary":{"total":0},"clips":[]}}'
+  exit 0
+fi
+
+echo '{"data":{"status":"ok","service":"animo-bee","opencv":{"mode":"shadow","enabled":true,"failOpen":true,"retainRejectedFiles":true},"queue":{"total":0},"upload":{"running":false}}}'
+exit 0
+`,
+    ),
+  ]);
+
+  const result = runScript(HEALTHCHECK_SCRIPT, {
+    env: {
+      PATH: `${fakeBin}:${process.env.PATH}`,
+      ANIMO_BEE_RUNTIME_ROOT: runtimeRoot,
+      ANIMO_BEE_DB_PATH: path.join(runtimeRoot, "db", "orchestrator.sqlite"),
+      ANIMO_BEE_PROD_COMPOSE_FILE: composeFile,
+      ANIMO_BEE_HEALTH_URL: "http://127.0.0.1:3001/health",
+      OPENCV_MODE: "enforce",
+    },
+  });
+
+  assert.equal(result.status, 1);
+  assert.match(
+    `${result.stdout}${result.stderr}`,
+    /does not match expected mode: enforce/,
+  );
 });
 
 test("docker-compose.prod.yml forwards phase 5 runtime env keys into the app service", async () => {

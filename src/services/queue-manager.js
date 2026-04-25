@@ -39,6 +39,9 @@ const ALLOWED_TRANSITIONS = Object.freeze({
   failed: ["ready", "queued"],
 });
 
+const OPENCV_MODES = new Set(["disabled", "shadow", "enforce"]);
+const OPENCV_DECISIONS = new Set(["accept", "reject", "maybe"]);
+
 const UPDATE_FIELDS = Object.freeze({
   checksum: "checksum",
   currentPath: "current_path",
@@ -47,6 +50,13 @@ const UPDATE_FIELDS = Object.freeze({
   failureReason: "failure_reason",
   metadataJson: "metadata_json",
   opencvEnabled: "opencv_enabled",
+  opencvMode: "opencv_mode",
+  opencvStatus: "opencv_status",
+  opencvDecision: "opencv_decision",
+  opencvReason: "opencv_reason",
+  opencvScoresJson: "opencv_scores_json",
+  opencvError: "opencv_error",
+  opencvProcessedAt: "opencv_processed_at",
   queuedAt: "queued_at",
   routedAt: "routed_at",
   uploadedAt: "uploaded_at",
@@ -72,6 +82,34 @@ function loadSqlModule() {
 
 function normalizeBoolean(value) {
   return value ? 1 : 0;
+}
+
+function normalizeOpenCvMode(value, fallback = "disabled") {
+  const mode = value ?? fallback;
+
+  if (OPENCV_MODES.has(mode)) {
+    return mode;
+  }
+
+  throw new Error(`Unknown OpenCV mode: ${mode}`);
+}
+
+function normalizeOpenCvDecision(value, fallback = "accept") {
+  if (value === "accepted") {
+    return "accept";
+  }
+
+  if (value === "rejected") {
+    return "reject";
+  }
+
+  const decision = value ?? fallback;
+
+  if (OPENCV_DECISIONS.has(decision)) {
+    return decision;
+  }
+
+  throw new Error(`Unknown OpenCV decision: ${decision}`);
 }
 
 function serializeJson(value) {
@@ -171,6 +209,13 @@ function normalizeClip(row) {
     sizeBytes: row.sizeBytes ?? null,
     mtimeMs: row.mtimeMs ?? null,
     opencvEnabled: Boolean(row.opencvEnabled),
+    opencvMode: row.opencvMode ?? "disabled",
+    opencvStatus: row.opencvStatus ?? null,
+    opencvDecision: row.opencvDecision ?? null,
+    opencvReason: row.opencvReason ?? null,
+    opencvScores: parseJson(row.opencvScoresJson) ?? {},
+    opencvError: row.opencvError ?? null,
+    opencvProcessedAt: row.opencvProcessedAt ?? null,
     decision: row.decision ?? null,
     decisionReason: row.decisionReason ?? null,
     metadata: parseJson(row.metadataJson),
@@ -184,10 +229,41 @@ function normalizeClip(row) {
 }
 
 function normalizeDecisionResult(result, fallbackDecision) {
+  const queueDecision = result?.decision ?? fallbackDecision;
+  const fallbackOpenCvDecision =
+    queueDecision === "rejected" ? "reject" : "accept";
+
   return {
-    decision: result?.decision ?? fallbackDecision,
+    decision: queueDecision,
     reason: result?.reason ?? null,
     metadata: result?.metadata ?? {},
+    opencvMode: result?.opencvMode ?? null,
+    opencvStatus: result?.opencvStatus ?? null,
+    opencvDecision: normalizeOpenCvDecision(
+      result?.opencvDecision,
+      fallbackOpenCvDecision,
+    ),
+    opencvScores: normalizeMetadataObject(result?.scores),
+    opencvError: result?.opencvError ?? null,
+    opencvProcessedAt: result?.opencvProcessedAt ?? nowIso(),
+  };
+}
+
+function buildOpenCvUpdates(clip, decision) {
+  const nextStatus =
+    decision.opencvStatus ?? (decision.opencvError ? "failed" : "completed");
+  const nextMode = normalizeOpenCvMode(
+    decision.opencvMode ?? clip?.opencvMode ?? "disabled",
+  );
+
+  return {
+    opencvMode: nextMode,
+    opencvStatus: nextStatus,
+    opencvDecision: decision.opencvDecision,
+    opencvReason: decision.reason,
+    opencvScoresJson: serializeJson(decision.opencvScores),
+    opencvError: decision.opencvError,
+    opencvProcessedAt: decision.opencvProcessedAt,
   };
 }
 
@@ -273,9 +349,41 @@ export class QueueManager {
     const schema = await fs.readFile(this.schemaPath, "utf8");
     this.database.exec("PRAGMA foreign_keys = ON;");
     this.database.exec(schema);
+    this.ensureSchemaCompatibility();
     await this.persist();
 
     return this;
+  }
+
+  ensureSchemaCompatibility() {
+    const clipColumns = new Set(
+      this.getRows("PRAGMA table_info(clips)").map((row) => row.name),
+    );
+
+    const compatibilityColumns = [
+      [
+        "opencv_mode",
+        "ALTER TABLE clips ADD COLUMN opencv_mode TEXT NOT NULL DEFAULT 'disabled'",
+      ],
+      ["opencv_status", "ALTER TABLE clips ADD COLUMN opencv_status TEXT"],
+      ["opencv_decision", "ALTER TABLE clips ADD COLUMN opencv_decision TEXT"],
+      ["opencv_reason", "ALTER TABLE clips ADD COLUMN opencv_reason TEXT"],
+      [
+        "opencv_scores_json",
+        "ALTER TABLE clips ADD COLUMN opencv_scores_json TEXT",
+      ],
+      ["opencv_error", "ALTER TABLE clips ADD COLUMN opencv_error TEXT"],
+      [
+        "opencv_processed_at",
+        "ALTER TABLE clips ADD COLUMN opencv_processed_at TEXT",
+      ],
+    ];
+
+    compatibilityColumns.forEach(([column, sql]) => {
+      if (!clipColumns.has(column)) {
+        this.run(sql);
+      }
+    });
   }
 
   ensureOpen() {
@@ -354,6 +462,13 @@ export class QueueManager {
         size_bytes AS sizeBytes,
         mtime_ms AS mtimeMs,
         opencv_enabled AS opencvEnabled,
+        opencv_mode AS opencvMode,
+        opencv_status AS opencvStatus,
+        opencv_decision AS opencvDecision,
+        opencv_reason AS opencvReason,
+        opencv_scores_json AS opencvScoresJson,
+        opencv_error AS opencvError,
+        opencv_processed_at AS opencvProcessedAt,
         decision,
         decision_reason AS decisionReason,
         metadata_json AS metadataJson,
@@ -524,6 +639,15 @@ export class QueueManager {
     }
 
     const checksum = options.checksum ?? (await hashFile(originalPath));
+    const opencvMode = normalizeOpenCvMode(
+      options.opencvMode,
+      options.opencvEnabled ? "shadow" : "disabled",
+    );
+    const opencvStatus = opencvMode === "disabled" ? "skipped" : "pending";
+    const opencvDecision = opencvMode === "disabled" ? "accept" : null;
+    const opencvReason = opencvMode === "disabled" ? "opencv_disabled" : null;
+    const opencvProcessedAt = opencvMode === "disabled" ? createdAt : null;
+    const opencvEnabled = options.opencvEnabled ?? opencvMode !== "disabled";
 
     this.run(
       `
@@ -537,6 +661,11 @@ export class QueueManager {
           size_bytes,
           mtime_ms,
           opencv_enabled,
+          opencv_mode,
+          opencv_status,
+          opencv_decision,
+          opencv_reason,
+          opencv_processed_at,
           created_at,
           updated_at
         ) VALUES (
@@ -549,6 +678,11 @@ export class QueueManager {
           $sizeBytes,
           $mtimeMs,
           $opencvEnabled,
+          $opencvMode,
+          $opencvStatus,
+          $opencvDecision,
+          $opencvReason,
+          $opencvProcessedAt,
           $createdAt,
           $updatedAt
         )
@@ -561,7 +695,12 @@ export class QueueManager {
         $checksum: checksum,
         $sizeBytes: event.sizeBytes ?? null,
         $mtimeMs: event.mtimeMs ?? null,
-        $opencvEnabled: normalizeBoolean(options.opencvEnabled),
+        $opencvEnabled: normalizeBoolean(opencvEnabled),
+        $opencvMode: opencvMode,
+        $opencvStatus: opencvStatus,
+        $opencvDecision: opencvDecision,
+        $opencvReason: opencvReason,
+        $opencvProcessedAt: opencvProcessedAt,
         $createdAt: createdAt,
         $updatedAt: createdAt,
       },
@@ -600,10 +739,23 @@ export class QueueManager {
 
       const paramName = `$field${index}`;
       assignments.push(`${columnName} = ${paramName}`);
-      params[paramName] =
-        fieldName === "opencvEnabled"
-          ? normalizeBoolean(fieldValue)
-          : fieldValue;
+
+      if (fieldName === "opencvEnabled") {
+        params[paramName] = normalizeBoolean(fieldValue);
+        return;
+      }
+
+      if (fieldName === "opencvMode") {
+        params[paramName] = normalizeOpenCvMode(fieldValue);
+        return;
+      }
+
+      if (fieldName === "opencvDecision") {
+        params[paramName] = normalizeOpenCvDecision(fieldValue);
+        return;
+      }
+
+      params[paramName] = fieldValue;
     });
 
     this.run(
@@ -622,7 +774,7 @@ export class QueueManager {
       (row) => {
         const clip = normalizeClip(row);
         this.run(
-          "UPDATE clips SET status = 'ready', updated_at = $updatedAt WHERE id = $id",
+          "UPDATE clips SET status = 'ready', opencv_status = 'pending', updated_at = $updatedAt WHERE id = $id",
           {
             $id: clip.id,
             $updatedAt: nowIso(),
@@ -671,16 +823,26 @@ export class QueueManager {
   }
 
   async markProcessing(clipId) {
-    return this.transitionClip(clipId, "processing");
+    return this.transitionClip(clipId, "processing", {
+      opencvStatus: "processing",
+    });
   }
 
   async acceptClip(clipId, result = {}) {
+    const clip = this.getClipById(clipId);
+
+    if (!clip) {
+      throw new Error(`Clip not found: ${clipId}`);
+    }
+
     const decision = normalizeDecisionResult(result, "accepted");
+    const openCvUpdates = buildOpenCvUpdates(clip, decision);
 
     await this.transitionClip(clipId, "accepted", {
       decision: "accepted",
       decisionReason: decision.reason,
       metadataJson: serializeJson(decision.metadata),
+      ...openCvUpdates,
     });
 
     return this.transitionClip(clipId, "queued", {
@@ -688,7 +850,7 @@ export class QueueManager {
     });
   }
 
-  async rejectClip(clipId, result, rejectedDirectory) {
+  async rejectClip(clipId, result, rejectedDirectory, options = {}) {
     const clip = this.getClipById(clipId);
 
     if (!clip) {
@@ -696,23 +858,39 @@ export class QueueManager {
     }
 
     const decision = normalizeDecisionResult(result, "rejected");
-    const routedPath = await moveFileToDirectory(
-      clip.currentPath,
-      rejectedDirectory,
-    );
+    const retainRejectedFiles = options.retainRejectedFiles ?? true;
+    let routedPath = clip.currentPath;
+
+    if (retainRejectedFiles) {
+      routedPath = await moveFileToDirectory(
+        clip.currentPath,
+        rejectedDirectory,
+      );
+    } else if (await pathExists(clip.currentPath)) {
+      await fs.unlink(clip.currentPath);
+    }
+
+    const openCvUpdates = buildOpenCvUpdates(clip, decision);
+    const metadata = mergeClipMetadata(decision.metadata, {
+      retention: {
+        retained: retainRejectedFiles,
+      },
+    });
 
     return this.transitionClip(clipId, "rejected", {
       currentPath: routedPath,
       decision: "rejected",
       decisionReason: decision.reason,
-      metadataJson: serializeJson(decision.metadata),
+      metadataJson: serializeJson(metadata),
       routedAt: nowIso(),
+      ...openCvUpdates,
     });
   }
 
-  async failClip(clipId, error) {
+  async failClip(clipId, error, updates = {}) {
     return this.transitionClip(clipId, "failed", {
       failureReason: error instanceof Error ? error.message : String(error),
+      ...updates,
     });
   }
 

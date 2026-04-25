@@ -5,18 +5,18 @@ const config = loadConfig();
 await ensureRuntimeDirectories(config);
 
 console.log(
-  `opencv worker idle with processedDir=${config.paths.processedDir} rejectedDir=${config.paths.rejectedDir}`,
+  `opencv placeholder worker idle with processedDir=${config.paths.processedDir} rejectedDir=${config.paths.rejectedDir}`,
 );
 
 const heartbeat = setInterval(() => {
   console.log(
-    `opencv worker idle with cameraSources=${config.paths.cameraSources.join(",")}`,
+    `opencv placeholder worker idle with cameraSources=${config.paths.cameraSources.join(",")}`,
   );
 }, 60000);
 
 function shutdown(signal) {
   clearInterval(heartbeat);
-  console.log(`opencv worker shutting down on ${signal}`);
+  console.log(`opencv placeholder worker shutting down on ${signal}`);
   process.exit(0);
 }
 

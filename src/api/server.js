@@ -9,14 +9,63 @@ function sendJson(response, statusCode, payload) {
   response.end(JSON.stringify(payload));
 }
 
-function baseHealth(config) {
+function getOpenCvRuntime(config, services) {
+  const fallbackMode =
+    config.opencv?.mode ??
+    (config.features.opencvEnabled ? "shadow" : "disabled");
+
+  const fallbackRuntime = {
+    mode: fallbackMode,
+    enabled: fallbackMode !== "disabled",
+    failOpen: config.opencv?.failOpen ?? true,
+    retainRejectedFiles: config.opencv?.retainRejectedFiles ?? true,
+    minMotionDurationMs: config.opencv?.minMotionDurationMs ?? null,
+    maxBrightnessChange: config.opencv?.maxBrightnessChange ?? null,
+    minRoiMotionScore: config.opencv?.minRoiMotionScore ?? null,
+  };
+
+  let persistedRuntime = null;
+
+  if (typeof services.configManager?.getOpenCvRuntime === "function") {
+    try {
+      persistedRuntime = services.configManager.getOpenCvRuntime();
+    } catch {
+      persistedRuntime = null;
+    }
+  }
+
+  const runtime = {
+    ...fallbackRuntime,
+    ...(persistedRuntime ?? {}),
+  };
+
+  const mode = runtime.mode ?? (runtime.enabled ? "shadow" : "disabled");
+  const enabled = mode !== "disabled";
+
+  return {
+    ...runtime,
+    mode,
+    enabled,
+    workerConfigured: Boolean(
+      services.opencvWorkerClient?.workerUrl ??
+      services.opencvWorkerClient?.workerCommand ??
+      config.opencv?.workerUrl ??
+      config.opencv?.workerCommand,
+    ),
+  };
+}
+
+function baseHealth(config, services) {
+  const openCvRuntime = getOpenCvRuntime(config, services);
+
   return {
     status: "ok",
     service: "animo-bee",
     mode: config.mode,
     host: config.server.host,
     port: config.server.port,
-    opencvEnabled: config.features.opencvEnabled,
+    opencvEnabled: openCvRuntime.enabled,
+    opencv: openCvRuntime,
     paths: {
       cameraSources: config.paths.cameraSources,
       processedDir: config.paths.processedDir,
@@ -26,7 +75,7 @@ function baseHealth(config) {
 }
 
 function healthData(config, services) {
-  const data = baseHealth(config);
+  const data = baseHealth(config, services);
 
   if (services.queueManager?.getQueueSummary) {
     data.queue = services.queueManager.getQueueSummary();
@@ -157,31 +206,82 @@ async function handleRequest(request, response, config, services) {
   }
 
   if (request.method === "POST" && url.pathname === "/config/opencv") {
-    if (!services.configManager?.setOpenCvEnabled) {
+    if (
+      !services.configManager?.setOpenCvEnabled &&
+      !services.configManager?.setOpenCvRuntime
+    ) {
       sendJson(response, 503, { error: "Config manager is not available." });
       return;
     }
 
     const payload = await readJsonBody(request);
 
-    if (typeof payload.enabled !== "boolean") {
-      sendJson(response, 422, { error: "enabled must be boolean." });
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+      sendJson(response, 422, { error: "payload must be an object." });
       return;
     }
 
-    const opencvEnabled = await services.configManager.setOpenCvEnabled(
-      payload.enabled,
-    );
+    const payloadKeys = Object.keys(payload);
+    const isLegacyTogglePayload =
+      payloadKeys.length === 1 && typeof payload.enabled === "boolean";
 
-    if (services.opencvWorkerClient) {
+    if (payloadKeys.length === 0) {
+      sendJson(response, 422, {
+        error: "payload must include enabled or OpenCV runtime fields.",
+      });
+      return;
+    }
+
+    const runtime = await (isLegacyTogglePayload
+      ? (() => {
+          const enabled = services.configManager.setOpenCvEnabled
+            ? services.configManager.setOpenCvEnabled(payload.enabled)
+            : Promise.resolve(Boolean(payload.enabled));
+
+          return Promise.resolve(enabled).then((nextEnabled) =>
+            services.configManager.getOpenCvRuntime
+              ? services.configManager.getOpenCvRuntime()
+              : {
+                  enabled: nextEnabled,
+                  mode: nextEnabled ? "shadow" : "disabled",
+                },
+          );
+        })()
+      : services.configManager.setOpenCvRuntime
+        ? await services.configManager.setOpenCvRuntime(payload)
+        : null);
+
+    if (!runtime) {
+      sendJson(response, 422, {
+        error: "setOpenCvRuntime is not available for this payload.",
+      });
+      return;
+    }
+
+    const opencvEnabled = runtime.enabled ?? false;
+
+    if (services.opencvWorkerClient?.applyRuntimeConfig) {
+      services.opencvWorkerClient.applyRuntimeConfig(runtime);
+    } else if (services.opencvWorkerClient) {
       services.opencvWorkerClient.enabled = opencvEnabled;
     }
 
-    sendJson(response, 200, {
-      data: {
-        opencvEnabled,
-      },
-    });
+    sendJson(
+      response,
+      200,
+      isLegacyTogglePayload
+        ? {
+            data: {
+              opencvEnabled,
+            },
+          }
+        : {
+            data: {
+              opencvEnabled,
+              opencv: runtime,
+            },
+          },
+    );
     return;
   }
 

@@ -38,19 +38,30 @@ function createClip() {
 
 test("normalizeWorkerResult validates decision values", () => {
   assert.throws(
-    () => normalizeWorkerResult({ decision: "maybe" }),
-    /Invalid OpenCV worker decision: maybe/,
+    () => normalizeWorkerResult({ decision: "blocked" }),
+    /Invalid OpenCV worker decision: blocked/,
   );
 
-  const normalized = normalizeWorkerResult({
+  const maybeNormalized = normalizeWorkerResult({
+    decision: "maybe",
+    reason: "uncertain",
+    scores: { roi: 0.62 },
+  });
+
+  assert.equal(maybeNormalized.decision, "accepted");
+  assert.equal(maybeNormalized.opencvDecision, "maybe");
+  assert.equal(maybeNormalized.scores.roi, 0.62);
+
+  const acceptedNormalized = normalizeWorkerResult({
     decision: "accepted",
     reason: "ok",
     metadata: { score: 0.9 },
   });
 
-  assert.equal(normalized.decision, "accepted");
-  assert.equal(normalized.reason, "ok");
-  assert.equal(normalized.metadata.score, 0.9);
+  assert.equal(acceptedNormalized.decision, "accepted");
+  assert.equal(acceptedNormalized.opencvDecision, "accept");
+  assert.equal(acceptedNormalized.reason, "ok");
+  assert.equal(acceptedNormalized.metadata.score, 0.9);
 });
 
 test("OpenCvWorkerClient returns skipped decision when disabled", async () => {
@@ -58,8 +69,16 @@ test("OpenCvWorkerClient returns skipped decision when disabled", async () => {
   const result = await client.decideClip(createClip());
 
   assert.equal(result.decision, "accepted");
-  assert.equal(result.reason, "opencv disabled");
+  assert.equal(result.opencvDecision, "accept");
+  assert.equal(result.reason, "opencv_disabled");
   assert.equal(result.metadata.skipped, true);
+});
+
+test("OpenCvWorkerClient defaults legacy enabled toggle to shadow mode", () => {
+  const client = new OpenCvWorkerClient(createConfig({ opencvEnabled: true }));
+
+  assert.equal(client.mode, "shadow");
+  assert.equal(client.enabled, true);
 });
 
 test("OpenCvWorkerClient errors when enabled without worker settings", async () => {
@@ -114,6 +133,7 @@ test("OpenCvWorkerClient uses HTTP worker when configured", async (t) => {
   const result = await client.decideClip(createClip());
 
   assert.equal(result.decision, "rejected");
+  assert.equal(result.opencvDecision, "reject");
   assert.equal(result.reason, "threshold");
   assert.equal(result.metadata.receivedClipId, 10);
 });
@@ -164,6 +184,7 @@ test("OpenCvWorkerClient uses process worker when configured", async () => {
   const result = await client.decideClip(createClip());
 
   assert.equal(result.decision, "accepted");
+  assert.equal(result.opencvDecision, "accept");
   assert.equal(result.reason, "process");
   assert.equal(result.metadata.clipId, 10);
 });

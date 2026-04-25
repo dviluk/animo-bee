@@ -34,6 +34,7 @@ COMPOSE_PROJECT="${ANIMO_BEE_COMPOSE_PROJECT:-animo-bee-prod}"
 RUNTIME_ROOT="${ANIMO_BEE_RUNTIME_ROOT:-/mnt/bee-disk/projects/animo-bee}"
 APP_PORT="${ANIMO_BEE_APP_PORT:-${PORT:-3001}}"
 OPENCV_ENABLED="${ANIMO_BEE_OPENCV_ENABLED:-false}"
+OPENCV_MODE="${OPENCV_MODE:-disabled}"
 BUILD_ARG="--build"
 
 usage() {
@@ -48,15 +49,33 @@ USAGE
 }
 
 validate_opencv_contract() {
+  case "$OPENCV_MODE" in
+    disabled|shadow|enforce)
+      ;;
+    *)
+      echo "ERROR: OPENCV_MODE must be disabled, shadow, or enforce. Received: $OPENCV_MODE"
+      exit 1
+      ;;
+  esac
+
+  if [[ "$OPENCV_MODE" != "disabled" ]]; then
+    OPENCV_ENABLED="true"
+  fi
+
   if [[ "$OPENCV_ENABLED" != "true" ]]; then
     return
+  fi
+
+  if [[ "$OPENCV_MODE" == "disabled" ]]; then
+    echo "ERROR: OPENCV_ENABLED=true requires OPENCV_MODE to be shadow or enforce"
+    exit 1
   fi
 
   if [[ -n "${OPENCV_WORKER_URL:-}" || -n "${OPENCV_WORKER_COMMAND:-}" ]]; then
     return
   fi
 
-  echo "ERROR: --with-opencv requires OPENCV_WORKER_URL or OPENCV_WORKER_COMMAND in $ENV_FILE"
+  echo "ERROR: OPENCV_MODE=$OPENCV_MODE requires OPENCV_WORKER_URL or OPENCV_WORKER_COMMAND in $ENV_FILE"
   exit 1
 }
 
@@ -64,6 +83,9 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --with-opencv)
       OPENCV_ENABLED="true"
+      if [[ "$OPENCV_MODE" == "disabled" ]]; then
+        OPENCV_MODE="shadow"
+      fi
       shift
       ;;
     --no-build)
@@ -110,12 +132,14 @@ echo "RUNTIME_ROOT=$RUNTIME_ROOT"
 echo "COMPOSE_PROJECT=$COMPOSE_PROJECT"
 echo "APP_PORT=$APP_PORT"
 echo "OPENCV_ENABLED=$OPENCV_ENABLED"
+echo "OPENCV_MODE=$OPENCV_MODE"
 
 validate_opencv_contract
 
 export ANIMO_BEE_RUNTIME_ROOT="$RUNTIME_ROOT"
 export ANIMO_BEE_APP_PORT="$APP_PORT"
 export ANIMO_BEE_OPENCV_ENABLED="$OPENCV_ENABLED"
+export OPENCV_MODE="$OPENCV_MODE"
 
 "$PROJECT_ROOT/scripts/prod/create-runtime-layout.sh"
 

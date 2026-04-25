@@ -28,10 +28,28 @@ function logClipQueued(clip) {
   );
 }
 
-async function handleClipDetected(event, services) {
+function getOpenCvMode(config) {
+  if (config.opencv?.mode) {
+    return config.opencv.mode;
+  }
+
+  return config.features.opencvEnabled ? "shadow" : "disabled";
+}
+
+function shouldRejectByOpenCvDecision(mode, decision) {
+  const openCvDecision =
+    decision?.opencvDecision ??
+    (decision?.decision === "rejected" ? "reject" : "accept");
+
+  return mode === "enforce" && openCvDecision === "reject";
+}
+
+export async function handleClipDetected(event, services) {
   const { config, opencvWorkerClient, queueManager } = services;
+  const opencvMode = getOpenCvMode(config);
   const { clip, created } = await queueManager.enqueueClip(event, {
-    opencvEnabled: config.features.opencvEnabled,
+    opencvEnabled: opencvMode !== "disabled",
+    opencvMode,
   });
 
   if (!created) {
@@ -40,26 +58,73 @@ async function handleClipDetected(event, services) {
 
   let activeClip = clip;
 
+  if (opencvMode === "disabled") {
+    const finalClip = await queueManager.acceptClip(activeClip.id, {
+      decision: "accepted",
+      opencvDecision: "accept",
+      opencvMode,
+      opencvStatus: "skipped",
+      reason: "opencv_disabled",
+      metadata: {
+        skipped: true,
+      },
+    });
+
+    logClipQueued(finalClip);
+    return finalClip;
+  }
+
   try {
-    if (config.features.opencvEnabled) {
-      activeClip = await queueManager.markProcessing(clip.id);
-    }
+    activeClip = await queueManager.markProcessing(clip.id);
 
     const decision = await opencvWorkerClient.decideClip(activeClip);
-    const finalClip =
-      decision.decision === "rejected"
-        ? await queueManager.rejectClip(
-            activeClip.id,
-            decision,
-            config.paths.rejectedDir,
-          )
-        : await queueManager.acceptClip(activeClip.id, decision);
+
+    const finalClip = shouldRejectByOpenCvDecision(opencvMode, decision)
+      ? await queueManager.rejectClip(
+          activeClip.id,
+          {
+            ...decision,
+            opencvMode,
+          },
+          config.paths.rejectedDir,
+          {
+            retainRejectedFiles: config.opencv?.retainRejectedFiles ?? true,
+          },
+        )
+      : await queueManager.acceptClip(activeClip.id, {
+          ...decision,
+          opencvMode,
+        });
 
     logClipQueued(finalClip);
 
     return finalClip;
   } catch (error) {
-    await queueManager.failClip(activeClip.id, error);
+    if (config.opencv?.failOpen ?? true) {
+      const finalClip = await queueManager.acceptClip(activeClip.id, {
+        decision: "accepted",
+        opencvDecision: "maybe",
+        opencvMode,
+        opencvStatus: "failed",
+        reason: "opencv_fail_open",
+        opencvError: error instanceof Error ? error.message : String(error),
+        metadata: {
+          failOpen: true,
+        },
+      });
+
+      logClipQueued(finalClip);
+      return finalClip;
+    }
+
+    await queueManager.failClip(activeClip.id, error, {
+      opencvMode,
+      opencvStatus: "failed",
+      opencvDecision: "maybe",
+      opencvReason: "opencv_error",
+      opencvError: error instanceof Error ? error.message : String(error),
+      opencvProcessedAt: new Date().toISOString(),
+    });
     throw error;
   }
 }

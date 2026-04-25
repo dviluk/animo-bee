@@ -21,6 +21,31 @@ CREATE TABLE IF NOT EXISTS clips (
     size_bytes INTEGER,
     mtime_ms REAL,
     opencv_enabled INTEGER NOT NULL DEFAULT 0 CHECK (opencv_enabled IN (0, 1)),
+    opencv_mode TEXT NOT NULL DEFAULT 'disabled' CHECK (
+        opencv_mode IN (
+            'disabled',
+            'shadow',
+            'enforce'
+        )
+    ),
+    opencv_status TEXT CHECK (
+        opencv_status IS NULL
+        OR opencv_status IN (
+            'skipped',
+            'pending',
+            'processing',
+            'completed',
+            'failed'
+        )
+    ),
+    opencv_decision TEXT CHECK (
+        opencv_decision IS NULL
+        OR opencv_decision IN ('accept', 'reject', 'maybe')
+    ),
+    opencv_reason TEXT,
+    opencv_scores_json TEXT,
+    opencv_error TEXT,
+    opencv_processed_at TEXT,
     decision TEXT CHECK (
         decision IS NULL
         OR decision IN ('accepted', 'rejected')

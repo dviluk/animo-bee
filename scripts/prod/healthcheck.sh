@@ -9,7 +9,6 @@ DB_PATH="${ANIMO_BEE_DB_PATH:-$RUNTIME_ROOT/db/orchestrator.sqlite}"
 PROD_COMPOSE_FILE="${ANIMO_BEE_PROD_COMPOSE_FILE:-$PROJECT_ROOT/docker-compose.prod.yml}"
 HEALTH_URL="${ANIMO_BEE_HEALTH_URL:-http://127.0.0.1:3001/health}"
 COMPOSE_PROJECT="${ANIMO_BEE_COMPOSE_PROJECT:-animo-bee-prod}"
-OPENCV_ENABLED="${ANIMO_BEE_OPENCV_ENABLED:-false}"
 CURL_TIMEOUT_SECONDS="${ANIMO_BEE_CURL_TIMEOUT_SECONDS:-5}"
 
 resolve_env_file() {
@@ -33,6 +32,31 @@ resolve_env_file() {
 
 ENV_FILE="$(resolve_env_file)"
 
+if [[ -f "$ENV_FILE" ]]; then
+  set +u
+  set -a
+  # shellcheck disable=SC1090
+  source "$ENV_FILE"
+  set +a
+  set -u
+fi
+
+OPENCV_MODE="${OPENCV_MODE:-${ANIMO_BEE_OPENCV_MODE:-}}"
+
+if [[ -z "$OPENCV_MODE" ]]; then
+  if [[ "${ANIMO_BEE_OPENCV_ENABLED:-${OPENCV_ENABLED:-false}}" == "true" ]]; then
+    OPENCV_MODE="shadow"
+  else
+    OPENCV_MODE="disabled"
+  fi
+fi
+
+if [[ "$OPENCV_MODE" == "disabled" ]]; then
+  OPENCV_ENABLED="false"
+else
+  OPENCV_ENABLED="true"
+fi
+
 declare -a FAILURES=()
 declare -a WARNINGS=()
 
@@ -48,6 +72,19 @@ warn() {
 
 pass() {
   echo "[ OK ] $1"
+}
+
+validate_opencv_mode() {
+  case "$OPENCV_MODE" in
+    disabled|shadow|enforce)
+      pass "OpenCV mode is valid: $OPENCV_MODE"
+      ;;
+    *)
+      fail "OpenCV mode is invalid: $OPENCV_MODE"
+      OPENCV_MODE="disabled"
+      OPENCV_ENABLED="false"
+      ;;
+  esac
 }
 
 check_runtime_paths() {
@@ -170,7 +207,7 @@ check_compose_runtime() {
 
   local -a compose_args=(--env-file "$ENV_FILE" -p "$COMPOSE_PROJECT" -f "$PROD_COMPOSE_FILE")
 
-  if [[ "$OPENCV_ENABLED" == "true" ]]; then
+  if [[ "$OPENCV_MODE" != "disabled" ]]; then
     compose_args=(--env-file "$ENV_FILE" --profile opencv -p "$COMPOSE_PROJECT" -f "$PROD_COMPOSE_FILE")
   fi
 
@@ -195,11 +232,11 @@ check_compose_runtime() {
     fail "Production app service is not running."
   fi
 
-  if [[ "$OPENCV_ENABLED" == "true" ]]; then
+  if [[ "$OPENCV_MODE" != "disabled" ]]; then
     if grep -qx "opencv-worker" <<<"$running_services"; then
       pass "Optional OpenCV worker service is running."
     else
-      warn "OpenCV profile is enabled but opencv-worker is not running."
+      warn "OpenCV mode is $OPENCV_MODE but opencv-worker is not running."
     fi
   fi
 
@@ -233,6 +270,43 @@ check_local_health_endpoint() {
     pass "Local health endpoint reports service identity."
   else
     fail "Local health endpoint did not report animo-bee service identity."
+  fi
+
+  if grep -Eq '"opencv"[[:space:]]*:' <<<"$health_response"; then
+    pass "Local health endpoint includes OpenCV runtime status."
+  else
+    fail "Local health endpoint is missing OpenCV runtime status."
+    return
+  fi
+
+  if grep -Eq "\"opencv\"[[:space:]]*:[[:space:]]*\\{[^}]*\"mode\"[[:space:]]*:[[:space:]]*\"$OPENCV_MODE\"" <<<"$health_response"; then
+    pass "Local health endpoint reports OpenCV mode $OPENCV_MODE."
+  else
+    fail "Local health endpoint OpenCV mode does not match expected mode: $OPENCV_MODE"
+  fi
+
+  local expected_opencv_enabled="true"
+
+  if [[ "$OPENCV_MODE" == "disabled" ]]; then
+    expected_opencv_enabled="false"
+  fi
+
+  if grep -Eq "\"opencv\"[[:space:]]*:[[:space:]]*\\{[^}]*\"enabled\"[[:space:]]*:[[:space:]]*$expected_opencv_enabled" <<<"$health_response"; then
+    pass "Local health endpoint reports OpenCV enabled=$expected_opencv_enabled."
+  else
+    fail "Local health endpoint OpenCV enabled flag does not match mode-derived expectation."
+  fi
+
+  if grep -Eq '"opencv"[[:space:]]*:[[:space:]]*\{[^}]*"failOpen"[[:space:]]*:[[:space:]]*(true|false)' <<<"$health_response"; then
+    pass "Local health endpoint includes OpenCV failOpen status."
+  else
+    fail "Local health endpoint is missing OpenCV failOpen status."
+  fi
+
+  if grep -Eq '"opencv"[[:space:]]*:[[:space:]]*\{[^}]*"retainRejectedFiles"[[:space:]]*:[[:space:]]*(true|false)' <<<"$health_response"; then
+    pass "Local health endpoint includes OpenCV retainRejectedFiles status."
+  else
+    fail "Local health endpoint is missing OpenCV retainRejectedFiles status."
   fi
 
   if grep -Eq '"queue"[[:space:]]*:' <<<"$health_response"; then
@@ -302,7 +376,9 @@ print_summary_and_exit() {
 echo "=== Animo Bee Production Healthcheck ==="
 echo "PROJECT_ROOT=$PROJECT_ROOT"
 echo "RUNTIME_ROOT=$RUNTIME_ROOT"
+echo "OPENCV_MODE=$OPENCV_MODE"
 
+validate_opencv_mode
 check_runtime_paths
 check_sqlite_integrity
 check_motioneye

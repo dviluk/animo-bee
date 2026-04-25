@@ -2,7 +2,12 @@ import assert from "node:assert/strict";
 import { once } from "node:events";
 import test from "node:test";
 
-import { createAppServer, startServer, stopServer } from "../src/index.js";
+import {
+  createAppServer,
+  handleClipDetected,
+  startServer,
+  stopServer,
+} from "../src/index.js";
 
 function buildConfig() {
   return {
@@ -13,6 +18,15 @@ function buildConfig() {
     },
     features: {
       opencvEnabled: false,
+    },
+    opencv: {
+      mode: "disabled",
+      enabled: false,
+      failOpen: true,
+      retainRejectedFiles: true,
+      minMotionDurationMs: 500,
+      maxBrightnessChange: 0.25,
+      minRoiMotionScore: 0.4,
     },
     paths: {
       cameraSources: ["/tmp/camera_1", "/tmp/camera_2"],
@@ -55,6 +69,16 @@ test("GET /health returns the runtime summary", async (t) => {
       host: "127.0.0.1",
       port: 0,
       opencvEnabled: false,
+      opencv: {
+        mode: "disabled",
+        enabled: false,
+        failOpen: true,
+        retainRejectedFiles: true,
+        minMotionDurationMs: 500,
+        maxBrightnessChange: 0.25,
+        minRoiMotionScore: 0.4,
+        workerConfigured: false,
+      },
       paths: {
         cameraSources: ["/tmp/camera_1", "/tmp/camera_2"],
         processedDir: "/tmp/processed",
@@ -86,6 +110,39 @@ test("GET /health includes queue and worker statuses when services are attached"
   assert.deepEqual(payload.data.queue, { total: 3 });
   assert.deepEqual(payload.data.upload, { running: true });
   assert.deepEqual(payload.data.irrigation, { enabled: true });
+});
+
+test("GET /health prefers persisted OpenCV runtime semantics from config manager", async (t) => {
+  const runtime = {
+    mode: "shadow",
+    enabled: true,
+    failOpen: false,
+    retainRejectedFiles: false,
+    minMotionDurationMs: 1200,
+    maxBrightnessChange: 0.15,
+    minRoiMotionScore: 0.8,
+  };
+
+  const { server, baseUrl } = await startTestServer({
+    configManager: {
+      getOpenCvRuntime: () => runtime,
+    },
+    opencvWorkerClient: {
+      workerUrl: "http://127.0.0.1:5002/decision",
+    },
+  });
+
+  t.after(() => server.close());
+
+  const response = await fetch(`${baseUrl}/health`);
+  const payload = await response.json();
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(payload.data.opencv, {
+    ...runtime,
+    workerConfigured: true,
+  });
+  assert.equal(payload.data.opencvEnabled, true);
 });
 
 test("GET / returns the scaffold status message", async (t) => {
@@ -220,6 +277,111 @@ test("POST /config/opencv toggles OpenCV runtime state", async (t) => {
       opencvEnabled: true,
     },
   });
+});
+
+test("POST /config/opencv accepts runtime payload and applies worker runtime config", async (t) => {
+  let capturedPayload = null;
+  let appliedRuntime = null;
+
+  const runtime = {
+    mode: "enforce",
+    enabled: true,
+    failOpen: false,
+    retainRejectedFiles: false,
+    minMotionDurationMs: 900,
+    maxBrightnessChange: 0.2,
+    minRoiMotionScore: 0.7,
+  };
+
+  const configManager = {
+    setOpenCvRuntime: async (payload) => {
+      capturedPayload = payload;
+      return runtime;
+    },
+  };
+  const opencvWorkerClient = {
+    applyRuntimeConfig: (nextRuntime) => {
+      appliedRuntime = nextRuntime;
+    },
+  };
+
+  const { server, baseUrl } = await startTestServer({
+    configManager,
+    opencvWorkerClient,
+  });
+
+  t.after(() => server.close());
+
+  const payloadInput = {
+    mode: "enforce",
+    failOpen: false,
+    retainRejectedFiles: false,
+    minMotionDurationMs: 900,
+    maxBrightnessChange: 0.2,
+    minRoiMotionScore: 0.7,
+  };
+
+  const response = await fetch(`${baseUrl}/config/opencv`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+    },
+    body: JSON.stringify(payloadInput),
+  });
+  const payload = await response.json();
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(capturedPayload, payloadInput);
+  assert.deepEqual(appliedRuntime, runtime);
+  assert.deepEqual(payload, {
+    data: {
+      opencvEnabled: true,
+      opencv: runtime,
+    },
+  });
+});
+
+test("handleClipDetected bypasses worker invocation in disabled mode", async () => {
+  let workerCalls = 0;
+
+  const queueManager = {
+    enqueueClip: async () => ({
+      created: true,
+      clip: {
+        id: 12,
+        status: "ready",
+        originalPath: "/tmp/clip-12.mp4",
+      },
+    }),
+    acceptClip: async (_clipId, decision) => ({
+      id: 12,
+      status: "queued",
+      originalPath: "/tmp/clip-12.mp4",
+      ...decision,
+    }),
+  };
+
+  const result = await handleClipDetected(
+    {
+      originalPath: "/tmp/clip-12.mp4",
+    },
+    {
+      config: buildConfig(),
+      queueManager,
+      opencvWorkerClient: {
+        decideClip: async () => {
+          workerCalls += 1;
+          throw new Error("disabled mode must not call worker");
+        },
+      },
+    },
+  );
+
+  assert.equal(workerCalls, 0);
+  assert.equal(result.reason, "opencv_disabled");
+  assert.equal(result.opencvStatus, "skipped");
+  assert.equal(result.opencvDecision, "accept");
+  assert.equal(result.metadata.skipped, true);
 });
 
 test("POST /uploads/retry/:clipId retries a failed upload and wakes the worker", async (t) => {
