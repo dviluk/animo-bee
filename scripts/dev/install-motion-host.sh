@@ -25,10 +25,26 @@ wget -qO /tmp/motion.deb "https://github.com/Motion-Project/motion/releases/down
 apt-get install -y /tmp/motion.deb
 rm -f /tmp/motion.deb
 
+echo "Installing build dependencies for motionEye..."
+apt-get install -y --no-install-recommends ca-certificates curl python3-venv python3-dev gcc libjpeg62-turbo-dev libcurl4-openssl-dev libssl-dev
+
+echo "Creating isolated venv at /opt/motioneye to prevent conda/system conflicts..."
+python3 -m venv /opt/motioneye
+/opt/motioneye/bin/pip install --upgrade pip
+
+echo "Installing motioneye via isolated pip..."
+/opt/motioneye/bin/pip install motioneye
+
+echo "Initializing motioneye setup and linking binaries..."
+ln -sf /opt/motioneye/bin/meyectl /usr/local/bin/meyectl
+ln -sf /opt/motioneye/bin/motioneye_init /usr/local/bin/motioneye_init
+/usr/local/bin/motioneye_init
+
 echo ""
 echo "Installation complete!"
 echo "Checking binary locations:"
 which motion || echo "WARNING: motion binary not found in PATH"
+which meyectl || echo "WARNING: meyectl binary not found in PATH"
 which v4l2-ctl || echo "WARNING: v4l2-ctl binary not found in PATH"
 
 echo ""

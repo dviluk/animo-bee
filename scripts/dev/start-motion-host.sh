@@ -11,11 +11,11 @@ PROJECT_ROOT="$(dirname "$(dirname "$SCRIPT_DIR")")"
 CONFIG_FILE="$PROJECT_ROOT/config/motion/motion.conf"
 RUNTIME_DIR="$PROJECT_ROOT/runtime"
 
-echo "=== Starting Native Motion Host ==="
+echo "=== Starting Native motionEye Host ==="
 
 # Check binary
-if ! command -v motion >/dev/null; then
-    echo "ERROR: motion binary not found in PATH."
+if ! command -v meyectl >/dev/null; then
+    echo "ERROR: meyectl binary not found in PATH."
     echo "Run ./install-motion-host.sh to set up the host."
     exit 1
 fi
@@ -23,19 +23,12 @@ fi
 # Ensure runtime directories exist
 mkdir -p "$RUNTIME_DIR/camera_1" "$RUNTIME_DIR/camera_2"
 
-# Start motion with config file
-echo "Using config file: $CONFIG_FILE"
-echo "Outputs will be written to: $RUNTIME_DIR/camera_1 (default)"
-
-# Change directory so relative path 'target_dir ../../runtime/*' inside config resolves correctly
-cd "$PROJECT_ROOT/config/motion"
-
-# Execute motion in the foreground or background (using nohup/&) based on arg
-if [ "${1:-}" = "-d" ] || [ "${1:-}" = "--daemon" ]; then
-    echo "Starting in background..."
-    nohup motion -c "motion.conf" >/dev/null 2>&1 &
-    echo "Motion started with PID $!"
+if systemctl status motioneye >/dev/null 2>&1; then
+    echo "Restarting systemd motioneye service..."
+    systemctl restart motioneye
 else
-    echo "Starting in foreground. Press Ctrl+C to stop."
-    motion -c "motion.conf"
+    echo "Starting systemd motioneye service..."
+    systemctl start motioneye
 fi
+
+echo "motionEye started! Access the Web UI at http://localhost:8765"
