@@ -5,25 +5,28 @@
 
 set -euo pipefail
 
+motioneye_running() {
+    pgrep -f "meyectl startserver" >/dev/null || pgrep -x "motion" >/dev/null
+}
+
 echo "=== Stopping motionEye Service (Conda) ==="
 
-# Check if meyectl or motion are running independently
-if pgrep -x "meyectl" >/dev/null || pgrep -x "motion" >/dev/null; then
+if motioneye_running; then
     echo "Found active meyectl or motion processes. Sending SIGTERM..."
-    pkill -x -TERM "meyectl" || true
+    pkill -f -TERM "meyectl startserver" || true
     pkill -x -TERM "motion" || true
     
     # Wait for clean shutdown
     SLEEP_SEC=0
-    while (pgrep -x "meyectl" >/dev/null || pgrep -x "motion" >/dev/null) && [ $SLEEP_SEC -lt 5 ]; do
+    while motioneye_running && [ $SLEEP_SEC -lt 5 ]; do
         sleep 1
         SLEEP_SEC=$((SLEEP_SEC + 1))
     done
     
     # Force kill if still running
-    if pgrep -x "meyectl" >/dev/null || pgrep -x "motion" >/dev/null; then
+    if motioneye_running; then
         echo "Processes still running. Sending SIGKILL..."
-        pkill -x -KILL "meyectl" || true
+        pkill -f -KILL "meyectl startserver" || true
         pkill -x -KILL "motion" || true
     fi
     echo "All motion and motionEye processes stopped cleanly."

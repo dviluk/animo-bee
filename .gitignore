@@ -1,1 +1,11 @@
 node_modules/
+runtime/motion.log
+runtime/motion.pid
+runtime/logs/*
+!runtime/logs/.gitkeep
+runtime/camera_1/
+!runtime/camera_1/.gitkeep
+runtime/camera_2/
+!runtime/camera_2/.gitkeep
+*.pickle
+.env

@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+motioneye_running() {
+    pgrep -f "meyectl startserver" >/dev/null || pgrep -x "motion" >/dev/null
+}
+
 echo "=== Host Baseline Validation ==="
 cat /etc/os-release | grep PRETTY_NAME
 uname -m
@@ -33,7 +37,7 @@ fi
 
 echo ""
 echo "=== motionEye State (Conda) ==="
-if pgrep -x "meyectl" >/dev/null; then
+if motioneye_running; then
     echo "motionEye meyectl process is currently running."
 else
     echo "motionEye meyectl process is inactive or not found."
