@@ -35,7 +35,7 @@ echo ""
 echo "=== Motion Config Parsing ==="
 if command -v motion >/dev/null; then
     if [ -f "$CONFIG_DIR/motion.conf" ]; then
-        motion -c "$CONFIG_DIR/motion.conf" -n -k || echo "Testing config syntax returned an error or warning."
+        echo "Found motion.conf. (Syntax checking without starting the daemon requires parsing the setup log. Verify configurations manually)."
     else
          echo "motion.conf not available for testing."
     fi
