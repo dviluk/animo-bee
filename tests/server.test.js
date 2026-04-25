@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { once } from "node:events";
 import test from "node:test";
 
-import { createAppServer } from "../src/index.js";
+import { createAppServer, startServer, stopServer } from "../src/index.js";
 
 function buildConfig() {
   return {
@@ -92,4 +92,37 @@ test("unknown routes return 404 JSON", async (t) => {
   assert.deepEqual(payload, {
     error: "Not Found",
   });
+});
+
+test("startServer supports disabling the file watcher", async (t) => {
+  const config = buildConfig();
+  config.server.port = 0;
+
+  const server = await startServer(config, { startWatcher: false });
+
+  t.after(async () => {
+    await stopServer(server);
+  });
+
+  assert.equal(server.listening, true);
+  assert.equal(server.clipWatcher, undefined);
+});
+
+test("stopServer closes both http server and attached clip watcher", async () => {
+  const server = createAppServer(buildConfig());
+  let watcherStopped = false;
+
+  server.clipWatcher = {
+    stop: async () => {
+      watcherStopped = true;
+    },
+  };
+
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+
+  await stopServer(server);
+
+  assert.equal(watcherStopped, true);
+  assert.equal(server.listening, false);
 });

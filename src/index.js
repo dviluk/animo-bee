@@ -1,6 +1,11 @@
 import { createServer } from "node:http";
 import { pathToFileURL } from "node:url";
 import { ensureRuntimeDirectories, loadConfig } from "./config/index.js";
+import { CLIP_DETECTED_EVENT, startClipWatcher } from "./services/file-watcher.js";
+
+function logClipDetected(event) {
+  console.log(JSON.stringify({ event: CLIP_DETECTED_EVENT, data: event }));
+}
 
 export function createAppServer(config) {
   return createServer((request, response) => {
@@ -53,10 +58,16 @@ export function createAppServer(config) {
   });
 }
 
-export async function startServer(config = loadConfig()) {
+export async function startServer(config = loadConfig(), options = {}) {
   const server = createAppServer(config);
+  const startWatcher = options.startWatcher ?? true;
+  const onClipDetected = options.onClipDetected ?? logClipDetected;
 
   await ensureRuntimeDirectories(config);
+
+  if (startWatcher) {
+    server.clipWatcher = await startClipWatcher(config, { onClipDetected });
+  }
 
   await new Promise((resolve) => {
     server.listen(config.server.port, config.server.host, resolve);
@@ -65,13 +76,42 @@ export async function startServer(config = loadConfig()) {
   return server;
 }
 
+export async function stopServer(server) {
+  await server.clipWatcher?.stop();
+
+  await new Promise((resolve, reject) => {
+    server.close((error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+
+      resolve();
+    });
+  });
+}
+
 export async function main() {
   const config = loadConfig();
-  await startServer(config);
+  const server = await startServer(config);
 
   console.log(
     `animo-bee scaffold listening on http://${config.server.host}:${config.server.port}`,
   );
+
+  const shutdown = async (signal) => {
+    console.log(`animo-bee shutting down on ${signal}`);
+    await stopServer(server);
+    process.exit(0);
+  };
+
+  process.once("SIGINT", () => {
+    void shutdown("SIGINT");
+  });
+
+  process.once("SIGTERM", () => {
+    void shutdown("SIGTERM");
+  });
 }
 
 if (
