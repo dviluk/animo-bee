@@ -17,8 +17,13 @@ fi
 echo "Updating apt repository..."
 apt-get update
 
-echo "Installing motion and v4l-utils..."
-apt-get install -y motion v4l-utils ffmpeg
+echo "Installing v4l-utils and ffmpeg..."
+apt-get install -y v4l-utils ffmpeg
+
+echo "Downloading and installing Motion 4.7.1 for Ubuntu 24.04..."
+wget -qO /tmp/motion.deb "https://github.com/Motion-Project/motion/releases/download/release-4.7.1/noble_motion_4.7.1-1_amd64.deb"
+apt-get install -y /tmp/motion.deb
+rm -f /tmp/motion.deb
 
 echo ""
 echo "Installation complete!"
