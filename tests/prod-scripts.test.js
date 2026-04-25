@@ -1,0 +1,205 @@
+import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import test from "node:test";
+
+const PROJECT_ROOT = process.cwd();
+const BOOTSTRAP_SCRIPT = path.join(
+  PROJECT_ROOT,
+  "scripts/prod/bootstrap-native.sh",
+);
+const CREATE_LAYOUT_SCRIPT = path.join(
+  PROJECT_ROOT,
+  "scripts/prod/create-runtime-layout.sh",
+);
+const HEALTHCHECK_SCRIPT = path.join(PROJECT_ROOT, "scripts/prod/healthcheck.sh");
+
+function runScript(scriptPath, options = {}) {
+  const { args = [], env = {} } = options;
+
+  return spawnSync("bash", [scriptPath, ...args], {
+    cwd: PROJECT_ROOT,
+    env: {
+      ...process.env,
+      ...env,
+    },
+    encoding: "utf8",
+  });
+}
+
+async function writeExecutable(filePath, content) {
+  await fs.writeFile(filePath, content, { mode: 0o755 });
+  await fs.chmod(filePath, 0o755);
+}
+
+async function prepareRuntimeRoot() {
+  const runtimeRoot = await fs.mkdtemp(path.join(os.tmpdir(), "animo-bee-prod-"));
+
+  const requiredDirectories = [
+    path.join(runtimeRoot, "data/camera_1"),
+    path.join(runtimeRoot, "data/camera_2"),
+    path.join(runtimeRoot, "data/processed"),
+    path.join(runtimeRoot, "data/rejected"),
+    path.join(runtimeRoot, "logs"),
+    path.join(runtimeRoot, "db"),
+  ];
+
+  await Promise.all(
+    requiredDirectories.map((directoryPath) =>
+      fs.mkdir(directoryPath, { recursive: true }),
+    ),
+  );
+
+  return runtimeRoot;
+}
+
+async function createFakeToolchain(mode) {
+  const fakeBin = await fs.mkdtemp(path.join(os.tmpdir(), "animo-bee-tools-"));
+
+  await writeExecutable(
+    path.join(fakeBin, "docker"),
+    `#!/usr/bin/env bash
+if [[ "$1" == "compose" && "$2" == "version" ]]; then
+  echo "Docker Compose version v2.0.0"
+  exit 0
+fi
+
+if [[ "$1" == "compose" ]]; then
+  exit 0
+fi
+
+echo "Docker version 0.0.0"
+exit 0
+`,
+  );
+
+  await writeExecutable(
+    path.join(fakeBin, "pgrep"),
+    `#!/usr/bin/env bash
+exit 1
+`,
+  );
+
+  await writeExecutable(
+    path.join(fakeBin, "curl"),
+    `#!/usr/bin/env bash
+exit 0
+`,
+  );
+
+  if (mode === "motioneye-present") {
+    await writeExecutable(
+      path.join(fakeBin, "systemctl"),
+      `#!/usr/bin/env bash
+if [[ "$1" == "list-unit-files" ]]; then
+  echo "motioneye.service enabled"
+  exit 0
+fi
+
+if [[ "$1" == "is-active" ]]; then
+  exit 0
+fi
+
+exit 0
+`,
+    );
+  } else {
+    await writeExecutable(
+      path.join(fakeBin, "systemctl"),
+      `#!/usr/bin/env bash
+if [[ "$1" == "list-unit-files" ]]; then
+  exit 0
+fi
+
+if [[ "$1" == "is-active" ]]; then
+  exit 3
+fi
+
+exit 0
+`,
+    );
+  }
+
+  return fakeBin;
+}
+
+test("bootstrap-native.sh supports --help", () => {
+  const result = runScript(BOOTSTRAP_SCRIPT, { args: ["--help"] });
+
+  assert.equal(result.status, 0);
+  assert.match(result.stdout, /Usage: .*bootstrap-native\.sh/);
+});
+
+test("create-runtime-layout.sh builds the expected layout and is idempotent", async () => {
+  const runtimeRoot = await fs.mkdtemp(path.join(os.tmpdir(), "animo-bee-layout-"));
+  const dbFileName = "integration.sqlite";
+
+  const env = {
+    ANIMO_BEE_RUNTIME_ROOT: runtimeRoot,
+    ANIMO_BEE_DB_FILE: dbFileName,
+    ANIMO_BEE_SKIP_MOUNT_CHECK: "1",
+  };
+
+  const firstRun = runScript(CREATE_LAYOUT_SCRIPT, { env });
+  const secondRun = runScript(CREATE_LAYOUT_SCRIPT, { env });
+
+  assert.equal(firstRun.status, 0);
+  assert.equal(secondRun.status, 0);
+  assert.match(firstRun.stdout, /Runtime layout is ready\./);
+
+  const expectedPaths = [
+    path.join(runtimeRoot, "data/camera_1"),
+    path.join(runtimeRoot, "data/camera_2"),
+    path.join(runtimeRoot, "data/processed"),
+    path.join(runtimeRoot, "data/rejected"),
+    path.join(runtimeRoot, "logs"),
+    path.join(runtimeRoot, "db"),
+    path.join(runtimeRoot, "db", dbFileName),
+  ];
+
+  const stats = await Promise.all(expectedPaths.map((target) => fs.stat(target)));
+
+  stats.slice(0, 6).forEach((entry) => assert.equal(entry.isDirectory(), true));
+  assert.equal(stats[6].isFile(), true);
+});
+
+test("healthcheck.sh fails when motionEye is absent", async () => {
+  const runtimeRoot = await prepareRuntimeRoot();
+  const fakeBin = await createFakeToolchain("motioneye-missing");
+  const composeFile = path.join(runtimeRoot, "docker-compose.prod.yml");
+
+  await fs.writeFile(composeFile, "services: {}\n", "utf8");
+
+  const result = runScript(HEALTHCHECK_SCRIPT, {
+    env: {
+      PATH: `${fakeBin}:${process.env.PATH}`,
+      ANIMO_BEE_RUNTIME_ROOT: runtimeRoot,
+      ANIMO_BEE_DB_PATH: path.join(runtimeRoot, "db", "orchestrator.sqlite"),
+      ANIMO_BEE_PROD_COMPOSE_FILE: composeFile,
+      ANIMO_BEE_HEALTH_URL: "http://127.0.0.1:39999/health",
+    },
+  });
+
+  assert.equal(result.status, 1);
+  assert.match(`${result.stdout}${result.stderr}`, /motionEye is not detected/);
+});
+
+test("healthcheck.sh succeeds when motionEye is active", async () => {
+  const runtimeRoot = await prepareRuntimeRoot();
+  const fakeBin = await createFakeToolchain("motioneye-present");
+
+  const result = runScript(HEALTHCHECK_SCRIPT, {
+    env: {
+      PATH: `${fakeBin}:${process.env.PATH}`,
+      ANIMO_BEE_RUNTIME_ROOT: runtimeRoot,
+      ANIMO_BEE_DB_PATH: path.join(runtimeRoot, "db", "orchestrator.sqlite"),
+      ANIMO_BEE_PROD_COMPOSE_FILE: path.join(runtimeRoot, "missing.prod.yml"),
+      ANIMO_BEE_HEALTH_URL: "http://127.0.0.1:39999/health",
+    },
+  });
+
+  assert.equal(result.status, 0);
+  assert.match(result.stdout, /Healthcheck completed without blocking failures\./);
+});
