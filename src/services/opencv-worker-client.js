@@ -39,7 +39,7 @@ function buildWorkerPayload(clip) {
   };
 }
 
-async function collectProcessResult(child, payload) {
+async function collectProcessResult(child, payload, timeoutMs) {
   let stdout = "";
   let stderr = "";
 
@@ -51,8 +51,42 @@ async function collectProcessResult(child, payload) {
   });
 
   const exitCode = await new Promise((resolve, reject) => {
-    child.on("error", reject);
-    child.on("close", resolve);
+    let settled = false;
+    let timeout = null;
+
+    const settle = (callback, value) => {
+      if (settled) {
+        return;
+      }
+
+      settled = true;
+
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+
+      callback(value);
+    };
+
+    timeout = setTimeout(() => {
+      try {
+        child.kill("SIGKILL");
+      } catch {
+        // No-op: process may already be exiting.
+      }
+
+      settle(
+        reject,
+        new Error(`OpenCV worker process timed out after ${timeoutMs}ms`),
+      );
+    }, timeoutMs);
+
+    child.on("error", (error) => {
+      settle(reject, error);
+    });
+    child.on("close", (code) => {
+      settle(resolve, code);
+    });
     child.stdin.end(`${JSON.stringify(payload)}\n`);
   });
 
@@ -127,6 +161,10 @@ export class OpenCvWorkerClient {
       stdio: ["pipe", "pipe", "pipe"],
     });
 
-    return collectProcessResult(child, buildWorkerPayload(clip));
+    return collectProcessResult(
+      child,
+      buildWorkerPayload(clip),
+      this.timeoutMs,
+    );
   }
 }

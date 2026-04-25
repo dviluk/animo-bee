@@ -122,7 +122,11 @@ export async function startServer(config = loadConfig(), options = {}) {
   if (startQueue) {
     server.queueManager =
       options.queueManager ?? (await createQueueManager(config));
-    await server.queueManager.recoverPendingWork();
+    server.resumableClips = await server.queueManager.recoverPendingWork();
+
+    if (options.onRecoveredClips) {
+      await options.onRecoveredClips(server.resumableClips);
+    }
   }
 
   server.opencvWorkerClient =

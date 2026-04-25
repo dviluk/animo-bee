@@ -1,7 +1,7 @@
 CREATE TABLE IF NOT EXISTS clips (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     source_camera TEXT NOT NULL,
-    original_path TEXT NOT NULL UNIQUE,
+    original_path TEXT NOT NULL,
     current_path TEXT NOT NULL,
     stable_at TEXT NOT NULL,
     status TEXT NOT NULL CHECK (

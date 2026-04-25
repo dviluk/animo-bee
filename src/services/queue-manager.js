@@ -334,9 +334,25 @@ export class QueueManager {
 
   getClipByOriginalPath(originalPath) {
     const [row] = this.getRows(
-      this.clipSelectSql("WHERE original_path = $originalPath"),
+      this.clipSelectSql(
+        "WHERE original_path = $originalPath ORDER BY stable_at DESC, id DESC LIMIT 1",
+      ),
       {
         $originalPath: normalizeClipPath(originalPath),
+      },
+    );
+
+    return normalizeClip(row);
+  }
+
+  getClipByOriginalPathAndStableAt(originalPath, stableAt) {
+    const [row] = this.getRows(
+      this.clipSelectSql(
+        "WHERE original_path = $originalPath AND stable_at = $stableAt",
+      ),
+      {
+        $originalPath: normalizeClipPath(originalPath),
+        $stableAt: stableAt,
       },
     );
 
@@ -361,13 +377,17 @@ export class QueueManager {
 
   async enqueueClip(event, options = {}) {
     const originalPath = normalizeClipPath(event.originalPath);
-    const existingClip = this.getClipByOriginalPath(originalPath);
+    const createdAt = nowIso();
+    const stableAt = event.stableAt ?? createdAt;
+    const existingClip = this.getClipByOriginalPathAndStableAt(
+      originalPath,
+      stableAt,
+    );
 
     if (existingClip) {
       return { clip: existingClip, created: false };
     }
 
-    const createdAt = nowIso();
     const checksum = options.checksum ?? (await hashFile(originalPath));
 
     this.run(
@@ -402,7 +422,7 @@ export class QueueManager {
         $sourceCamera: event.sourceCamera,
         $originalPath: originalPath,
         $currentPath: originalPath,
-        $stableAt: event.stableAt ?? createdAt,
+        $stableAt: stableAt,
         $checksum: checksum,
         $sizeBytes: event.sizeBytes ?? null,
         $mtimeMs: event.mtimeMs ?? null,
@@ -413,7 +433,10 @@ export class QueueManager {
     );
     await this.persist();
 
-    return { clip: this.getClipByOriginalPath(originalPath), created: true };
+    return {
+      clip: this.getClipByOriginalPathAndStableAt(originalPath, stableAt),
+      created: true,
+    };
   }
 
   async transitionClip(clipId, nextStatus, updates = {}) {
@@ -502,10 +525,14 @@ export class QueueManager {
   async acceptClip(clipId, result = {}) {
     const decision = normalizeDecisionResult(result, "accepted");
 
-    return this.transitionClip(clipId, "accepted", {
+    await this.transitionClip(clipId, "accepted", {
       decision: "accepted",
       decisionReason: decision.reason,
       metadataJson: serializeJson(decision.metadata),
+    });
+
+    return this.transitionClip(clipId, "queued", {
+      queuedAt: nowIso(),
     });
   }
 

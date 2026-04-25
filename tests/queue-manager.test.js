@@ -81,7 +81,7 @@ test("QueueManager initializes required SQLite tables", async (t) => {
   );
 });
 
-test("QueueManager enqueues a clip exactly once per original path", async (t) => {
+test("QueueManager enqueues once per original path and stable timestamp", async (t) => {
   const runtime = await createRuntimeConfig();
   const queueManager = await createQueueManager(runtime.config);
 
@@ -100,10 +100,20 @@ test("QueueManager enqueues a clip exactly once per original path", async (t) =>
     checksum: "checksum-a",
     opencvEnabled: true,
   });
+  const replayEvent = {
+    ...event,
+    stableAt: new Date(Date.parse(event.stableAt) + 1000).toISOString(),
+  };
+  const thirdInsert = await queueManager.enqueueClip(replayEvent, {
+    checksum: "checksum-b",
+    opencvEnabled: true,
+  });
 
   assert.equal(firstInsert.created, true);
   assert.equal(secondInsert.created, false);
+  assert.equal(thirdInsert.created, true);
   assert.equal(firstInsert.clip.id, secondInsert.clip.id);
+  assert.notEqual(firstInsert.clip.id, thirdInsert.clip.id);
   assert.equal(firstInsert.clip.status, "ready");
   assert.equal(firstInsert.clip.opencvEnabled, true);
 
@@ -111,7 +121,7 @@ test("QueueManager enqueues a clip exactly once per original path", async (t) =>
     "SELECT COUNT(*) AS total FROM clips",
   )[0].total;
 
-  assert.equal(rowCount, 1);
+  assert.equal(rowCount, 2);
 });
 
 test("assertClipTransition rejects illegal transitions", () => {
@@ -156,13 +166,11 @@ test("recoverPendingWork resets processing and uploading states", async (t) => {
   });
 
   await queueManager.markProcessing(processingClip.id);
-  await queueManager.acceptClip(uploadingClip.id, {
+  const queuedClip = await queueManager.acceptClip(uploadingClip.id, {
     decision: "accepted",
     reason: "queue",
   });
-  await queueManager.transitionClip(uploadingClip.id, "queued", {
-    queuedAt: new Date().toISOString(),
-  });
+  assert.equal(queuedClip.status, "queued");
   await queueManager.transitionClip(uploadingClip.id, "uploading");
 
   const resumable = await queueManager.recoverPendingWork();

@@ -167,3 +167,19 @@ test("OpenCvWorkerClient uses process worker when configured", async () => {
   assert.equal(result.reason, "process");
   assert.equal(result.metadata.clipId, 10);
 });
+
+test("OpenCvWorkerClient times out hanging process workers", async () => {
+  const client = new OpenCvWorkerClient(
+    createConfig({
+      opencvEnabled: true,
+      workerCommand: process.execPath,
+      workerArgs: ["-e", "setInterval(() => {}, 1000);"],
+      timeoutMs: 50,
+    }),
+  );
+
+  await assert.rejects(
+    () => client.decideClip(createClip()),
+    /timed out after 50ms/,
+  );
+});

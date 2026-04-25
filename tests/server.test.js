@@ -108,6 +108,34 @@ test("startServer supports disabling the file watcher", async (t) => {
   assert.equal(server.clipWatcher, undefined);
 });
 
+test("startServer exposes recovered clips when queue recovery runs", async (t) => {
+  const config = buildConfig();
+  config.server.port = 0;
+
+  const recoveredClips = [{ id: 99, status: "queued" }];
+  const queueManager = {
+    recoverPendingWork: async () => recoveredClips,
+    close: async () => {},
+  };
+
+  let callbackPayload = null;
+
+  const server = await startServer(config, {
+    startWatcher: false,
+    queueManager,
+    onRecoveredClips: async (clips) => {
+      callbackPayload = clips;
+    },
+  });
+
+  t.after(async () => {
+    await stopServer(server);
+  });
+
+  assert.deepEqual(server.resumableClips, recoveredClips);
+  assert.deepEqual(callbackPayload, recoveredClips);
+});
+
 test("stopServer closes both http server and attached clip watcher", async () => {
   const server = createAppServer(buildConfig());
   let watcherStopped = false;
