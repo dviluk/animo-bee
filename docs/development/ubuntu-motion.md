@@ -15,6 +15,7 @@
 - The same script points motionEye runtime artifacts and logs to `./runtime/logs`.
 - Dockerized `animo-bee` mounts `./runtime` to `/app/runtime` and reads the clips synchronously.
 - motionEye serves the Web UI at `http://localhost:8765`. The internal Motion webcontrol port remains `7999`.
+- From inside the Docker `app` container, the host service is available at `http://host.docker.internal:8765` because `docker-compose.dev.yml` maps `host.docker.internal` to Docker's Linux host gateway.
 
 **Operational Sequence:**
 

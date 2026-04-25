@@ -11,9 +11,14 @@ services:
         required: true
     ports:
       - "3001:3001"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./src:/app/src
+      - ./tests:/app/tests
+      - ./scripts:/app/scripts
       - ./runtime:/app/runtime
+      - ./node_modules:/app/node_modules
     restart: unless-stopped
     healthcheck:
       test:
