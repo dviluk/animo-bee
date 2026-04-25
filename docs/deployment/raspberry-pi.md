@@ -73,7 +73,54 @@ Supported overrides:
 - `ANIMO_BEE_PROD_COMPOSE_FILE`
 - `ANIMO_BEE_HEALTH_URL`
 
+## 4) Start Production Stack
+
+Run from the repository root:
+
+```bash
+./scripts/prod/start-prod-stack.sh
+```
+
+Optional flags:
+
+- `--with-opencv` enables the optional OpenCV worker profile.
+- `--no-build` skips image rebuild and starts with existing images.
+
+Examples:
+
+```bash
+./scripts/prod/start-prod-stack.sh --with-opencv
+./scripts/prod/start-prod-stack.sh --with-opencv --no-build
+```
+
+Supported overrides:
+
+- `ANIMO_BEE_PROD_COMPOSE_FILE`
+- `ANIMO_BEE_ENV_FILE`
+- `ANIMO_BEE_RUNTIME_ROOT`
+- `ANIMO_BEE_APP_PORT`
+- `ANIMO_BEE_OPENCV_ENABLED`
+- `ANIMO_BEE_COMPOSE_PROJECT`
+
+## 5) Stop Production Stack
+
+```bash
+./scripts/prod/stop-prod-stack.sh
+```
+
+Optional cleanup:
+
+```bash
+./scripts/prod/stop-prod-stack.sh --volumes
+```
+
+Supported overrides:
+
+- `ANIMO_BEE_PROD_COMPOSE_FILE`
+- `ANIMO_BEE_ENV_FILE`
+- `ANIMO_BEE_COMPOSE_PROJECT`
+
 ## Notes
 
 - These scripts do not configure motionEye; they only validate its presence and status.
-- Production compose launch and stop wrappers are implemented in Task 007.
+- Production compose wrappers keep motionEye native and run only the orchestrator services in containers.

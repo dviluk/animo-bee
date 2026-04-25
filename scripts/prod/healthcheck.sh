@@ -8,6 +8,29 @@ RUNTIME_ROOT="${ANIMO_BEE_RUNTIME_ROOT:-/mnt/bee-disk/projects/animo-bee}"
 DB_PATH="${ANIMO_BEE_DB_PATH:-$RUNTIME_ROOT/db/orchestrator.sqlite}"
 PROD_COMPOSE_FILE="${ANIMO_BEE_PROD_COMPOSE_FILE:-$PROJECT_ROOT/docker-compose.prod.yml}"
 HEALTH_URL="${ANIMO_BEE_HEALTH_URL:-http://127.0.0.1:3001/health}"
+COMPOSE_PROJECT="${ANIMO_BEE_COMPOSE_PROJECT:-animo-bee-prod}"
+OPENCV_ENABLED="${ANIMO_BEE_OPENCV_ENABLED:-false}"
+
+resolve_env_file() {
+  if [[ -n "${ANIMO_BEE_ENV_FILE:-}" ]]; then
+    printf '%s\n' "$ANIMO_BEE_ENV_FILE"
+    return
+  fi
+
+  if [[ -f "$PROJECT_ROOT/.env.prod" ]]; then
+    printf '%s\n' "$PROJECT_ROOT/.env.prod"
+    return
+  fi
+
+  if [[ -f "$PROJECT_ROOT/.env" ]]; then
+    printf '%s\n' "$PROJECT_ROOT/.env"
+    return
+  fi
+
+  printf '%s\n' "$PROJECT_ROOT/.env.example"
+}
+
+ENV_FILE="$(resolve_env_file)"
 
 declare -a FAILURES=()
 declare -a WARNINGS=()
@@ -119,12 +142,44 @@ check_compose_runtime() {
     return
   fi
 
+  if [[ ! -f "$ENV_FILE" ]]; then
+    fail "Environment file not found: $ENV_FILE"
+    return
+  fi
+
+  local -a compose_args=(--env-file "$ENV_FILE" -p "$COMPOSE_PROJECT" -f "$PROD_COMPOSE_FILE")
+
+  if [[ "$OPENCV_ENABLED" == "true" ]]; then
+    compose_args=(--env-file "$ENV_FILE" --profile opencv -p "$COMPOSE_PROJECT" -f "$PROD_COMPOSE_FILE")
+  fi
+
+  if docker compose "${compose_args[@]}" config >/dev/null 2>&1; then
+    pass "Production compose file renders successfully."
+  else
+    fail "Production compose file could not be rendered: $PROD_COMPOSE_FILE"
+    return
+  fi
+
   local running_services
-  running_services="$(docker compose -f "$PROD_COMPOSE_FILE" ps --services --status running 2>/dev/null || true)"
+  running_services="$(docker compose "${compose_args[@]}" ps --services --status running 2>/dev/null || true)"
 
   if [[ -z "$running_services" ]]; then
     warn "No running services found for $PROD_COMPOSE_FILE"
     return
+  fi
+
+  if grep -qx "app" <<<"$running_services"; then
+    pass "Production app service is running."
+  else
+    warn "Production app service is not running."
+  fi
+
+  if [[ "$OPENCV_ENABLED" == "true" ]]; then
+    if grep -qx "opencv-worker" <<<"$running_services"; then
+      pass "Optional OpenCV worker service is running."
+    else
+      warn "OpenCV profile is enabled but opencv-worker is not running."
+    fi
   fi
 
   pass "Running services detected for production compose stack."

@@ -18,6 +18,14 @@ const HEALTHCHECK_SCRIPT = path.join(
   PROJECT_ROOT,
   "scripts/prod/healthcheck.sh",
 );
+const START_PROD_STACK_SCRIPT = path.join(
+  PROJECT_ROOT,
+  "scripts/prod/start-prod-stack.sh",
+);
+const STOP_PROD_STACK_SCRIPT = path.join(
+  PROJECT_ROOT,
+  "scripts/prod/stop-prod-stack.sh",
+);
 
 function runScript(scriptPath, options = {}) {
   const { args = [], env = {} } = options;
@@ -214,4 +222,154 @@ test("healthcheck.sh succeeds when motionEye is active", async () => {
     result.stdout,
     /Healthcheck completed without blocking failures\./,
   );
+});
+
+test("start-prod-stack.sh enables the optional OpenCV profile", async () => {
+  const runtimeRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "animo-bee-prod-"),
+  );
+  const fakeBin = await createFakeToolchain("motioneye-present");
+  const composeFile = path.join(runtimeRoot, "docker-compose.prod.yml");
+  const envFile = path.join(runtimeRoot, "stack.env");
+  const dockerLog = path.join(runtimeRoot, "docker.log");
+
+  await Promise.all([
+    fs.writeFile(composeFile, "services: {}\n", "utf8"),
+    fs.writeFile(envFile, "APP_MODE=production\n", "utf8"),
+    writeExecutable(
+      path.join(fakeBin, "docker"),
+      `#!/usr/bin/env bash
+printf '%s\n' "$*" >> "${dockerLog}"
+
+if [[ "$1" == "compose" && "$2" == "version" ]]; then
+  echo "Docker Compose version v2.0.0"
+  exit 0
+fi
+
+if [[ "$1" == "compose" && "$*" == *" ps"* ]]; then
+  echo "app"
+  echo "opencv-worker"
+  exit 0
+fi
+
+if [[ "$1" == "compose" ]]; then
+  exit 0
+fi
+
+exit 0
+`,
+    ),
+  ]);
+
+  const result = runScript(START_PROD_STACK_SCRIPT, {
+    args: ["--with-opencv", "--no-build"],
+    env: {
+      PATH: `${fakeBin}:${process.env.PATH}`,
+      ANIMO_BEE_PROD_COMPOSE_FILE: composeFile,
+      ANIMO_BEE_ENV_FILE: envFile,
+      ANIMO_BEE_RUNTIME_ROOT: runtimeRoot,
+      ANIMO_BEE_DB_FILE: "integration.sqlite",
+      ANIMO_BEE_SKIP_MOUNT_CHECK: "1",
+    },
+  });
+
+  assert.equal(result.status, 0);
+  assert.match(result.stdout, /OPENCV_ENABLED=true/);
+
+  const dockerInvocations = await fs.readFile(dockerLog, "utf8");
+  assert.match(dockerInvocations, /--profile opencv/);
+
+  await fs.stat(path.join(runtimeRoot, "data", "camera_1"));
+  await fs.stat(path.join(runtimeRoot, "db", "integration.sqlite"));
+});
+
+test("stop-prod-stack.sh forwards volume cleanup option", async () => {
+  const runtimeRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "animo-bee-stop-"),
+  );
+  const fakeBin = await createFakeToolchain("motioneye-present");
+  const composeFile = path.join(runtimeRoot, "docker-compose.prod.yml");
+  const envFile = path.join(runtimeRoot, "stack.env");
+  const dockerLog = path.join(runtimeRoot, "docker.log");
+
+  await Promise.all([
+    fs.writeFile(composeFile, "services: {}\n", "utf8"),
+    fs.writeFile(envFile, "APP_MODE=production\n", "utf8"),
+    writeExecutable(
+      path.join(fakeBin, "docker"),
+      `#!/usr/bin/env bash
+printf '%s\n' "$*" >> "${dockerLog}"
+
+if [[ "$1" == "compose" && "$2" == "version" ]]; then
+  echo "Docker Compose version v2.0.0"
+  exit 0
+fi
+
+if [[ "$1" == "compose" ]]; then
+  exit 0
+fi
+
+exit 0
+`,
+    ),
+  ]);
+
+  const result = runScript(STOP_PROD_STACK_SCRIPT, {
+    args: ["--volumes"],
+    env: {
+      PATH: `${fakeBin}:${process.env.PATH}`,
+      ANIMO_BEE_PROD_COMPOSE_FILE: composeFile,
+      ANIMO_BEE_ENV_FILE: envFile,
+    },
+  });
+
+  assert.equal(result.status, 0);
+
+  const dockerInvocations = await fs.readFile(dockerLog, "utf8");
+  assert.match(dockerInvocations, /down --remove-orphans --volumes/);
+});
+
+test("healthcheck.sh fails when production compose cannot be rendered", async () => {
+  const runtimeRoot = await prepareRuntimeRoot();
+  const fakeBin = await createFakeToolchain("motioneye-present");
+  const composeFile = path.join(runtimeRoot, "docker-compose.prod.yml");
+  const envFile = path.join(runtimeRoot, "stack.env");
+
+  await Promise.all([
+    fs.writeFile(composeFile, "services: {}\n", "utf8"),
+    fs.writeFile(envFile, "APP_MODE=production\n", "utf8"),
+    writeExecutable(
+      path.join(fakeBin, "docker"),
+      `#!/usr/bin/env bash
+if [[ "$1" == "compose" && "$2" == "version" ]]; then
+  echo "Docker Compose version v2.0.0"
+  exit 0
+fi
+
+if [[ "$1" == "compose" && "$*" == *" config"* ]]; then
+  exit 1
+fi
+
+if [[ "$1" == "compose" ]]; then
+  exit 0
+fi
+
+exit 0
+`,
+    ),
+  ]);
+
+  const result = runScript(HEALTHCHECK_SCRIPT, {
+    env: {
+      PATH: `${fakeBin}:${process.env.PATH}`,
+      ANIMO_BEE_RUNTIME_ROOT: runtimeRoot,
+      ANIMO_BEE_DB_PATH: path.join(runtimeRoot, "db", "orchestrator.sqlite"),
+      ANIMO_BEE_PROD_COMPOSE_FILE: composeFile,
+      ANIMO_BEE_ENV_FILE: envFile,
+      ANIMO_BEE_HEALTH_URL: "http://127.0.0.1:39999/health",
+    },
+  });
+
+  assert.equal(result.status, 1);
+  assert.match(`${result.stdout}${result.stderr}`, /could not be rendered/);
 });

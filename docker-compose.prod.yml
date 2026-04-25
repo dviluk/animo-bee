@@ -1,0 +1,66 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: npm run start
+    environment:
+      APP_MODE: production
+      HOST: 0.0.0.0
+      PORT: ${ANIMO_BEE_APP_PORT:-3001}
+      CAMERA_1_DIR: /app/runtime/camera_1
+      CAMERA_2_DIR: /app/runtime/camera_2
+      PROCESSED_DIR: /app/runtime/processed
+      REJECTED_DIR: /app/runtime/rejected
+      DB_PATH: /app/runtime/db/${ANIMO_BEE_DB_FILE:-orchestrator.sqlite}
+      LOG_DIR: /app/runtime/logs
+      OPENCV_ENABLED: ${ANIMO_BEE_OPENCV_ENABLED:-false}
+    ports:
+      - "${ANIMO_BEE_APP_PORT:-3001}:${ANIMO_BEE_APP_PORT:-3001}"
+    volumes:
+      - ${ANIMO_BEE_RUNTIME_ROOT:-/mnt/bee-disk/projects/animo-bee}/data/camera_1:/app/runtime/camera_1
+      - ${ANIMO_BEE_RUNTIME_ROOT:-/mnt/bee-disk/projects/animo-bee}/data/camera_2:/app/runtime/camera_2
+      - ${ANIMO_BEE_RUNTIME_ROOT:-/mnt/bee-disk/projects/animo-bee}/data/processed:/app/runtime/processed
+      - ${ANIMO_BEE_RUNTIME_ROOT:-/mnt/bee-disk/projects/animo-bee}/data/rejected:/app/runtime/rejected
+      - ${ANIMO_BEE_RUNTIME_ROOT:-/mnt/bee-disk/projects/animo-bee}/db:/app/runtime/db
+      - ${ANIMO_BEE_RUNTIME_ROOT:-/mnt/bee-disk/projects/animo-bee}/logs:/app/runtime/logs
+    restart: unless-stopped
+    init: true
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "curl -fsS http://localhost:$${PORT:-3001}/health || exit 1",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+  opencv-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: node src/opencv-worker.js
+    environment:
+      APP_MODE: production
+      HOST: 0.0.0.0
+      PORT: ${ANIMO_BEE_APP_PORT:-3001}
+      CAMERA_1_DIR: /app/runtime/camera_1
+      CAMERA_2_DIR: /app/runtime/camera_2
+      PROCESSED_DIR: /app/runtime/processed
+      REJECTED_DIR: /app/runtime/rejected
+      DB_PATH: /app/runtime/db/${ANIMO_BEE_DB_FILE:-orchestrator.sqlite}
+      LOG_DIR: /app/runtime/logs
+      OPENCV_ENABLED: "true"
+    volumes:
+      - ${ANIMO_BEE_RUNTIME_ROOT:-/mnt/bee-disk/projects/animo-bee}/data/camera_1:/app/runtime/camera_1
+      - ${ANIMO_BEE_RUNTIME_ROOT:-/mnt/bee-disk/projects/animo-bee}/data/camera_2:/app/runtime/camera_2
+      - ${ANIMO_BEE_RUNTIME_ROOT:-/mnt/bee-disk/projects/animo-bee}/data/processed:/app/runtime/processed
+      - ${ANIMO_BEE_RUNTIME_ROOT:-/mnt/bee-disk/projects/animo-bee}/data/rejected:/app/runtime/rejected
+      - ${ANIMO_BEE_RUNTIME_ROOT:-/mnt/bee-disk/projects/animo-bee}/db:/app/runtime/db
+      - ${ANIMO_BEE_RUNTIME_ROOT:-/mnt/bee-disk/projects/animo-bee}/logs:/app/runtime/logs
+    restart: unless-stopped
+    init: true
+    profiles:
+      - opencv
