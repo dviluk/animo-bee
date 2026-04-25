@@ -17,7 +17,11 @@ export function createAppServer(config) {
             host: config.server.host,
             port: config.server.port,
             opencvEnabled: config.features.opencvEnabled,
-            cameraSources: config.paths.cameraSources,
+            paths: {
+              cameraSources: config.paths.cameraSources,
+              processedDir: config.paths.processedDir,
+              rejectedDir: config.paths.rejectedDir,
+            },
           },
         }),
       );

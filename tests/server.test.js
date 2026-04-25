@@ -55,7 +55,11 @@ test("GET /health returns the runtime summary", async (t) => {
       host: "127.0.0.1",
       port: 0,
       opencvEnabled: false,
-      cameraSources: ["/tmp/camera_1", "/tmp/camera_2"],
+      paths: {
+        cameraSources: ["/tmp/camera_1", "/tmp/camera_2"],
+        processedDir: "/tmp/processed",
+        rejectedDir: "/tmp/rejected",
+      },
     },
   });
 });
