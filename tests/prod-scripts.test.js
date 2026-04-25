@@ -14,7 +14,10 @@ const CREATE_LAYOUT_SCRIPT = path.join(
   PROJECT_ROOT,
   "scripts/prod/create-runtime-layout.sh",
 );
-const HEALTHCHECK_SCRIPT = path.join(PROJECT_ROOT, "scripts/prod/healthcheck.sh");
+const HEALTHCHECK_SCRIPT = path.join(
+  PROJECT_ROOT,
+  "scripts/prod/healthcheck.sh",
+);
 
 function runScript(scriptPath, options = {}) {
   const { args = [], env = {} } = options;
@@ -35,7 +38,9 @@ async function writeExecutable(filePath, content) {
 }
 
 async function prepareRuntimeRoot() {
-  const runtimeRoot = await fs.mkdtemp(path.join(os.tmpdir(), "animo-bee-prod-"));
+  const runtimeRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "animo-bee-prod-"),
+  );
 
   const requiredDirectories = [
     path.join(runtimeRoot, "data/camera_1"),
@@ -133,7 +138,9 @@ test("bootstrap-native.sh supports --help", () => {
 });
 
 test("create-runtime-layout.sh builds the expected layout and is idempotent", async () => {
-  const runtimeRoot = await fs.mkdtemp(path.join(os.tmpdir(), "animo-bee-layout-"));
+  const runtimeRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "animo-bee-layout-"),
+  );
   const dbFileName = "integration.sqlite";
 
   const env = {
@@ -159,7 +166,9 @@ test("create-runtime-layout.sh builds the expected layout and is idempotent", as
     path.join(runtimeRoot, "db", dbFileName),
   ];
 
-  const stats = await Promise.all(expectedPaths.map((target) => fs.stat(target)));
+  const stats = await Promise.all(
+    expectedPaths.map((target) => fs.stat(target)),
+  );
 
   stats.slice(0, 6).forEach((entry) => assert.equal(entry.isDirectory(), true));
   assert.equal(stats[6].isFile(), true);
@@ -201,5 +210,8 @@ test("healthcheck.sh succeeds when motionEye is active", async () => {
   });
 
   assert.equal(result.status, 0);
-  assert.match(result.stdout, /Healthcheck completed without blocking failures\./);
+  assert.match(
+    result.stdout,
+    /Healthcheck completed without blocking failures\./,
+  );
 });

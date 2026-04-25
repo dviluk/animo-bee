@@ -6,11 +6,27 @@
 - Docker: 29.4.0
 - Docker Compose: v2.40.3
 - Motion: candidate 4.6.0-1ubuntu2 (apt)
-- motionEye: Not available in apt, proceeding with native Motion only.
-- Devices: No `/dev/video*` devices currently visible on the host environment (expected for virtual/remote baseline).
+- motionEye: Installed via pip under Conda Python 3.9. Running in user-space.
 
 **Host-to-Container Directory Mapping:**
 
 - Native Motion records to `./runtime/camera_1` and `./runtime/camera_2` which are shared directly into the Docker environment.
 - Dockerized `animo-bee` mounts `./runtime` to `/app/runtime` and reads the clips synchronously.
-- **Startup Sequence:** Host Motion must be started first (`./scripts/dev/start-motion-host.sh`), followed by the Dockerized `animo-bee` app (`./scripts/dev/start-dev.sh`).
+
+**Operational Sequence:**
+
+1. Start the host Motion service (this sets up local cameras and writes to `runtime/`):
+   ```bash
+   ./scripts/dev/start-motion-host.sh
+   ```
+2. Start the Dockerized `animo-bee` environment (this attaches to `runtime/`):
+   ```bash
+   ./scripts/dev/start-dev.sh
+   ```
+3. Run the E2E verification script to ensure successful capture, visibility, and architecture alignment:
+   ```bash
+   ./scripts/dev/verify-motion-flow.sh
+   ```
+
+**Failure Path Considerations:**
+- Missing `/dev/video*` devices due to VM or WSL isolation will be flagged by the verification script. Run `sudo chmod 666 /dev/video*` or assign the user to the `video` group if permissions fail.
