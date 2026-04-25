@@ -232,3 +232,175 @@ test("rejectClip routes the file and records rejection metadata", async (t) => {
   assert.equal(await pathExists(clipPath), false);
   assert.equal(await pathExists(rejectedClip.currentPath), true);
 });
+
+test("completeUpload moves file to processed directory and marks uploaded", async (t) => {
+  const runtime = await createRuntimeConfig();
+  const queueManager = await createQueueManager(runtime.config);
+  const processedDir = path.join(runtime.root, "processed");
+
+  t.after(async () => {
+    await queueManager.close();
+    await fs.rm(runtime.root, { force: true, recursive: true });
+  });
+
+  const { clipPath, event } = await createClipEvent(
+    runtime.camera1,
+    "clip-upload-success.mp4",
+    "uploadable",
+  );
+
+  const { clip } = await queueManager.enqueueClip(event, {
+    checksum: "upload-success",
+    opencvEnabled: false,
+  });
+
+  const queuedClip = await queueManager.acceptClip(clip.id, {
+    decision: "accepted",
+    reason: "queued",
+  });
+  await queueManager.markUploading(queuedClip.id);
+
+  const uploadedClip = await queueManager.completeUpload(
+    queuedClip.id,
+    processedDir,
+  );
+
+  assert.equal(uploadedClip.status, "uploaded");
+  assert.equal(uploadedClip.uploadedAt !== null, true);
+  assert.equal(uploadedClip.routedAt !== null, true);
+  assert.equal(uploadedClip.currentPath.startsWith(processedDir), true);
+  assert.equal(await pathExists(clipPath), false);
+  assert.equal(await pathExists(uploadedClip.currentPath), true);
+});
+
+test("upload attempt helpers report counts and preserve attempt ordering", async (t) => {
+  const runtime = await createRuntimeConfig();
+  const queueManager = await createQueueManager(runtime.config);
+
+  t.after(async () => {
+    await queueManager.close();
+    await fs.rm(runtime.root, { force: true, recursive: true });
+  });
+
+  const firstEvent = await createClipEvent(runtime.camera1, "clip-a.mp4", "a");
+  const secondEvent = await createClipEvent(runtime.camera2, "clip-b.mp4", "b");
+
+  const { clip: firstClip } = await queueManager.enqueueClip(firstEvent.event, {
+    checksum: "a",
+    opencvEnabled: false,
+  });
+  const { clip: secondClip } = await queueManager.enqueueClip(
+    secondEvent.event,
+    {
+      checksum: "b",
+      opencvEnabled: false,
+    },
+  );
+
+  await queueManager.acceptClip(firstClip.id, { decision: "accepted" });
+  await queueManager.acceptClip(secondClip.id, { decision: "accepted" });
+
+  const nextQueued = queueManager.getNextQueuedClip();
+
+  assert.equal(nextQueued.id, firstClip.id);
+
+  await queueManager.recordUploadAttempt(firstClip.id, {
+    attemptNumber: 2,
+    responseStatus: 429,
+    errorSummary: "rate limited",
+  });
+  await queueManager.recordUploadAttempt(firstClip.id, {
+    attemptNumber: 1,
+    responseStatus: 500,
+    errorSummary: "upstream error",
+  });
+
+  const attempts = queueManager.listUploadAttempts(firstClip.id);
+  const attemptCount = queueManager.getUploadAttemptCount(firstClip.id);
+
+  assert.equal(attemptCount, 2);
+  assert.deepEqual(
+    attempts.map((attempt) => attempt.attemptNumber),
+    [1, 2],
+  );
+  assert.equal(attempts[0].errorSummary, "upstream error");
+});
+
+test("retryFailedUpload only allows failed clips and clears failure reason", async (t) => {
+  const runtime = await createRuntimeConfig();
+  const queueManager = await createQueueManager(runtime.config);
+
+  t.after(async () => {
+    await queueManager.close();
+    await fs.rm(runtime.root, { force: true, recursive: true });
+  });
+
+  const { event } = await createClipEvent(
+    runtime.camera1,
+    "clip-failed.mp4",
+    "c",
+  );
+  const { clip } = await queueManager.enqueueClip(event, {
+    checksum: "failed",
+    opencvEnabled: false,
+  });
+
+  await queueManager.failClip(clip.id, new Error("network timeout"));
+
+  const retriedClip = await queueManager.retryFailedUpload(clip.id);
+
+  assert.equal(retriedClip.status, "queued");
+  assert.equal(retriedClip.failureReason, null);
+
+  await assert.rejects(
+    () => queueManager.retryFailedUpload(retriedClip.id),
+    /Only failed clips can be retried/,
+  );
+});
+
+test("getQueueSummary aggregates queue and failed counts", async (t) => {
+  const runtime = await createRuntimeConfig();
+  const queueManager = await createQueueManager(runtime.config);
+
+  t.after(async () => {
+    await queueManager.close();
+    await fs.rm(runtime.root, { force: true, recursive: true });
+  });
+
+  const queuedEvent = await createClipEvent(
+    runtime.camera1,
+    "clip-queued.mp4",
+    "q",
+  );
+  const failedEvent = await createClipEvent(
+    runtime.camera2,
+    "clip-failed-2.mp4",
+    "f",
+  );
+
+  const { clip: queuedClip } = await queueManager.enqueueClip(
+    queuedEvent.event,
+    {
+      checksum: "queued",
+      opencvEnabled: false,
+    },
+  );
+  const { clip: failedClip } = await queueManager.enqueueClip(
+    failedEvent.event,
+    {
+      checksum: "failed",
+      opencvEnabled: false,
+    },
+  );
+
+  await queueManager.acceptClip(queuedClip.id, { decision: "accepted" });
+  await queueManager.failClip(failedClip.id, "final failure");
+
+  const summary = queueManager.getQueueSummary();
+
+  assert.equal(summary.total, 2);
+  assert.equal(summary.byStatus.queued, 1);
+  assert.equal(summary.byStatus.failed, 1);
+  assert.equal(summary.pendingUploads, 1);
+  assert.equal(summary.failed, 1);
+});

@@ -10,6 +10,7 @@ PROD_COMPOSE_FILE="${ANIMO_BEE_PROD_COMPOSE_FILE:-$PROJECT_ROOT/docker-compose.p
 HEALTH_URL="${ANIMO_BEE_HEALTH_URL:-http://127.0.0.1:3001/health}"
 COMPOSE_PROJECT="${ANIMO_BEE_COMPOSE_PROJECT:-animo-bee-prod}"
 OPENCV_ENABLED="${ANIMO_BEE_OPENCV_ENABLED:-false}"
+CURL_TIMEOUT_SECONDS="${ANIMO_BEE_CURL_TIMEOUT_SECONDS:-5}"
 
 resolve_env_file() {
   if [[ -n "${ANIMO_BEE_ENV_FILE:-}" ]]; then
@@ -62,6 +63,12 @@ check_runtime_paths() {
   for path in "${required_paths[@]}"; do
     if [[ -d "$path" ]]; then
       pass "Directory exists: $path"
+
+      if [[ -r "$path" && -w "$path" ]]; then
+        pass "Directory is readable and writable: $path"
+      else
+        fail "Directory is not readable and writable: $path"
+      fi
     else
       fail "Missing directory: $path"
     fi
@@ -91,7 +98,21 @@ check_sqlite_integrity() {
     pass "SQLite quick_check returned ok."
   else
     fail "SQLite quick_check did not return ok. Output: ${check_result:-<empty>}"
+    return
   fi
+
+  local -a required_tables=(clips upload_attempts runtime_config irrigation_events)
+
+  for table in "${required_tables[@]}"; do
+    local table_exists
+    table_exists="$(sqlite3 "$DB_PATH" "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = '$table';" 2>/dev/null || true)"
+
+    if [[ "$table_exists" == "1" ]]; then
+      pass "SQLite table exists: $table"
+    else
+      fail "SQLite table is missing: $table"
+    fi
+  done
 }
 
 check_motioneye() {
@@ -192,10 +213,71 @@ check_local_health_endpoint() {
     return
   fi
 
-  if curl -fsS "$HEALTH_URL" >/dev/null 2>&1; then
+  local health_response
+  health_response="$(curl -fsS --max-time "$CURL_TIMEOUT_SECONDS" "$HEALTH_URL" 2>/dev/null || true)"
+
+  if [[ -n "$health_response" ]]; then
     pass "Local health endpoint responded: $HEALTH_URL"
   else
     fail "Local health endpoint did not respond: $HEALTH_URL"
+    return
+  fi
+
+  if grep -Eq '"status"[[:space:]]*:[[:space:]]*"ok"' <<<"$health_response"; then
+    pass "Local health endpoint reports status ok."
+  else
+    fail "Local health endpoint did not report status ok."
+  fi
+
+  if grep -Eq '"service"[[:space:]]*:[[:space:]]*"animo-bee"' <<<"$health_response"; then
+    pass "Local health endpoint reports service identity."
+  else
+    fail "Local health endpoint did not report animo-bee service identity."
+  fi
+
+  if grep -Eq '"queue"[[:space:]]*:' <<<"$health_response"; then
+    pass "Local health endpoint includes queue summary."
+  else
+    fail "Local health endpoint is missing queue summary."
+  fi
+
+  if grep -Eq '"upload"[[:space:]]*:' <<<"$health_response"; then
+    pass "Local health endpoint includes upload worker status."
+  else
+    fail "Local health endpoint is missing upload worker status."
+  fi
+}
+
+check_local_queue_endpoint() {
+  if ! command -v curl >/dev/null 2>&1; then
+    return
+  fi
+
+  local queue_url="${ANIMO_BEE_QUEUE_URL:-}"
+
+  if [[ -z "$queue_url" ]]; then
+    if [[ "$HEALTH_URL" == */health ]]; then
+      queue_url="${HEALTH_URL%/health}/queue"
+    else
+      warn "ANIMO_BEE_QUEUE_URL is not set and queue URL could not be inferred."
+      return
+    fi
+  fi
+
+  local queue_response
+  queue_response="$(curl -fsS --max-time "$CURL_TIMEOUT_SECONDS" "$queue_url" 2>/dev/null || true)"
+
+  if [[ -n "$queue_response" ]]; then
+    pass "Local queue endpoint responded: $queue_url"
+  else
+    fail "Local queue endpoint did not respond: $queue_url"
+    return
+  fi
+
+  if grep -Eq '"summary"[[:space:]]*:' <<<"$queue_response" && grep -Eq '"clips"[[:space:]]*:' <<<"$queue_response"; then
+    pass "Local queue endpoint exposes summary and clips."
+  else
+    fail "Local queue endpoint response is missing summary or clips."
   fi
 }
 
@@ -226,4 +308,5 @@ check_sqlite_integrity
 check_motioneye
 check_compose_runtime
 check_local_health_endpoint
+check_local_queue_endpoint
 print_summary_and_exit

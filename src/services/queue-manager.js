@@ -375,6 +375,83 @@ export class QueueManager {
     ).map(normalizeClip);
   }
 
+  listClips(options = {}) {
+    const limit = Number.isInteger(options.limit)
+      ? Math.min(Math.max(options.limit, 1), 200)
+      : 50;
+    const where = [];
+    const params = { $limit: limit };
+
+    if (options.status) {
+      where.push("status = $status");
+      params.$status = options.status;
+    }
+
+    const whereSql = where.length > 0 ? `WHERE ${where.join(" AND ")}` : "";
+
+    return this.getRows(
+      this.clipSelectSql(`${whereSql} ORDER BY updated_at DESC LIMIT $limit`),
+      params,
+    ).map(normalizeClip);
+  }
+
+  getQueueSummary() {
+    const rows = this.getRows(
+      "SELECT status, COUNT(*) AS total FROM clips GROUP BY status ORDER BY status",
+    );
+    const byStatus = Object.fromEntries(
+      CLIP_STATES.map((status) => [status, 0]),
+    );
+
+    rows.forEach((row) => {
+      byStatus[row.status] = row.total;
+    });
+
+    return {
+      byStatus,
+      total: rows.reduce((sum, row) => sum + row.total, 0),
+      pendingUploads: (byStatus.queued ?? 0) + (byStatus.uploading ?? 0),
+      failed: byStatus.failed ?? 0,
+    };
+  }
+
+  getNextQueuedClip() {
+    const [row] = this.getRows(
+      this.clipSelectSql(
+        "WHERE status = 'queued' ORDER BY queued_at ASC, updated_at ASC, id ASC LIMIT 1",
+      ),
+    );
+
+    return normalizeClip(row);
+  }
+
+  getUploadAttemptCount(clipId) {
+    const [row] = this.getRows(
+      "SELECT COUNT(*) AS total FROM upload_attempts WHERE clip_id = $clipId",
+      { $clipId: clipId },
+    );
+
+    return row?.total ?? 0;
+  }
+
+  listUploadAttempts(clipId) {
+    return this.getRows(
+      `
+        SELECT
+          id,
+          clip_id AS clipId,
+          attempt_number AS attemptNumber,
+          response_status AS responseStatus,
+          error_summary AS errorSummary,
+          created_at AS createdAt
+        FROM upload_attempts
+        WHERE clip_id = $clipId
+        ORDER BY attempt_number ASC
+      `,
+      { $clipId: clipId },
+    );
+  }
+
   async enqueueClip(event, options = {}) {
     const originalPath = normalizeClipPath(event.originalPath);
     const createdAt = nowIso();
@@ -561,6 +638,56 @@ export class QueueManager {
   async failClip(clipId, error) {
     return this.transitionClip(clipId, "failed", {
       failureReason: error instanceof Error ? error.message : String(error),
+    });
+  }
+
+  async markUploading(clipId) {
+    return this.transitionClip(clipId, "uploading");
+  }
+
+  async completeUpload(clipId, processedDirectory) {
+    const clip = this.getClipById(clipId);
+
+    if (!clip) {
+      throw new Error(`Clip not found: ${clipId}`);
+    }
+
+    const routedPath = await moveFileToDirectory(
+      clip.currentPath,
+      processedDirectory,
+    );
+
+    return this.transitionClip(clipId, "uploaded", {
+      currentPath: routedPath,
+      uploadedAt: nowIso(),
+      routedAt: nowIso(),
+      failureReason: null,
+    });
+  }
+
+  async requeueUpload(clipId, error) {
+    return this.transitionClip(clipId, "queued", {
+      queuedAt: nowIso(),
+      failureReason: error instanceof Error ? error.message : String(error),
+    });
+  }
+
+  async retryFailedUpload(clipId) {
+    const clip = this.getClipById(clipId);
+
+    if (!clip) {
+      throw new Error(`Clip not found: ${clipId}`);
+    }
+
+    if (clip.status !== "failed") {
+      throw new Error(
+        `Only failed clips can be retried. Current status: ${clip.status}`,
+      );
+    }
+
+    return this.transitionClip(clipId, "queued", {
+      queuedAt: nowIso(),
+      failureReason: null,
     });
   }
 

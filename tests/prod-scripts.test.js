@@ -26,6 +26,7 @@ const STOP_PROD_STACK_SCRIPT = path.join(
   PROJECT_ROOT,
   "scripts/prod/stop-prod-stack.sh",
 );
+const PROD_COMPOSE_FILE = path.join(PROJECT_ROOT, "docker-compose.prod.yml");
 
 function runScript(scriptPath, options = {}) {
   const { args = [], env = {} } = options;
@@ -218,7 +219,10 @@ test("healthcheck.sh fails when compose file is absent", async () => {
   });
 
   assert.equal(result.status, 1);
-  assert.match(`${result.stdout}${result.stderr}`, /Production compose file not found/);
+  assert.match(
+    `${result.stdout}${result.stderr}`,
+    /Production compose file not found/,
+  );
 });
 
 test("start-prod-stack.sh enables the optional OpenCV profile", async () => {
@@ -369,4 +373,89 @@ exit 0
 
   assert.equal(result.status, 1);
   assert.match(`${result.stdout}${result.stderr}`, /could not be rendered/);
+});
+
+test("healthcheck.sh validates health and queue payload structures", async () => {
+  const runtimeRoot = await prepareRuntimeRoot();
+  const fakeBin = await createFakeToolchain("motioneye-present");
+  const composeFile = path.join(runtimeRoot, "docker-compose.prod.yml");
+
+  await Promise.all([
+    fs.writeFile(composeFile, "services: {}\n", "utf8"),
+    writeExecutable(
+      path.join(fakeBin, "docker"),
+      `#!/usr/bin/env bash
+if [[ "$1" == "compose" && "$2" == "version" ]]; then
+  echo "Docker Compose version v2.0.0"
+  exit 0
+fi
+
+if [[ "$1" == "compose" && "$*" == *" ps "* ]]; then
+  echo "app"
+  exit 0
+fi
+
+if [[ "$1" == "compose" ]]; then
+  exit 0
+fi
+
+exit 0
+`,
+    ),
+    writeExecutable(
+      path.join(fakeBin, "curl"),
+      `#!/usr/bin/env bash
+url="\${@: -1}"
+
+if [[ "$url" == *"/queue" ]]; then
+  echo '{"data":{"summary":{"total":0},"clips":[]}}'
+  exit 0
+fi
+
+echo '{"data":{"status":"ok","service":"animo-bee","queue":{"total":0},"upload":{"running":false}}}'
+exit 0
+`,
+    ),
+  ]);
+
+  const result = runScript(HEALTHCHECK_SCRIPT, {
+    env: {
+      PATH: `${fakeBin}:${process.env.PATH}`,
+      ANIMO_BEE_RUNTIME_ROOT: runtimeRoot,
+      ANIMO_BEE_DB_PATH: path.join(runtimeRoot, "db", "orchestrator.sqlite"),
+      ANIMO_BEE_PROD_COMPOSE_FILE: composeFile,
+      ANIMO_BEE_HEALTH_URL: "http://127.0.0.1:3001/health",
+    },
+  });
+
+  assert.equal(result.status, 0);
+  assert.match(result.stdout, /Local health endpoint includes queue summary/);
+  assert.match(
+    result.stdout,
+    /Local health endpoint includes upload worker status/,
+  );
+  assert.match(result.stdout, /Local queue endpoint exposes summary and clips/);
+});
+
+test("docker-compose.prod.yml forwards phase 5 runtime env keys into the app service", async () => {
+  const composeFile = await fs.readFile(PROD_COMPOSE_FILE, "utf8");
+
+  [
+    /OPENCV_WORKER_COMMAND:\s*\$\{OPENCV_WORKER_COMMAND:-\}/,
+    /OPENCV_WORKER_ARGS:\s*\$\{OPENCV_WORKER_ARGS:-\[\]\}/,
+    /OPENCV_WORKER_URL:\s*\$\{OPENCV_WORKER_URL:-\}/,
+    /UPLOAD_ENABLED:\s*\$\{UPLOAD_ENABLED:-false\}/,
+    /UPLOAD_URL:\s*\$\{UPLOAD_URL:-\}/,
+    /UPLOAD_HEADERS_JSON:\s*\$\{UPLOAD_HEADERS_JSON:-\{\}\}/,
+    /UPLOAD_MAX_ATTEMPTS:\s*\$\{UPLOAD_MAX_ATTEMPTS:-3\}/,
+    /UPLOAD_POLL_INTERVAL_MS:\s*\$\{UPLOAD_POLL_INTERVAL_MS:-5000\}/,
+    /UPLOAD_RETRY_DELAY_MS:\s*\$\{UPLOAD_RETRY_DELAY_MS:-30000\}/,
+    /UPLOAD_TIMEOUT_MS:\s*\$\{UPLOAD_TIMEOUT_MS:-60000\}/,
+    /IRRIGATION_ENABLED:\s*\$\{IRRIGATION_ENABLED:-false\}/,
+    /IRRIGATION_TRIGGER_URL:\s*\$\{IRRIGATION_TRIGGER_URL:-\}/,
+    /IRRIGATION_HEADERS_JSON:\s*\$\{IRRIGATION_HEADERS_JSON:-\{\}\}/,
+    /IRRIGATION_TIMEOUT_MS:\s*\$\{IRRIGATION_TIMEOUT_MS:-10000\}/,
+  ].forEach((pattern) => {
+    assert.match(composeFile, pattern);
+  });
 });

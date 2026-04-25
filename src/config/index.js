@@ -7,6 +7,11 @@ dotenv.config();
 const DEFAULT_HOST = "0.0.0.0";
 const DEFAULT_PORT = 3001;
 const DEFAULT_OPENCV_TIMEOUT_MS = 30000;
+const DEFAULT_UPLOAD_MAX_ATTEMPTS = 3;
+const DEFAULT_UPLOAD_POLL_INTERVAL_MS = 5000;
+const DEFAULT_UPLOAD_RETRY_DELAY_MS = 30000;
+const DEFAULT_UPLOAD_TIMEOUT_MS = 60000;
+const DEFAULT_IRRIGATION_TIMEOUT_MS = 10000;
 const DEFAULT_PATHS = {
   camera1: "./runtime/camera_1",
   camera2: "./runtime/camera_2",
@@ -36,6 +41,32 @@ function parsePositiveInteger(rawValue, defaultValue, name) {
   throw new Error(`Invalid ${name} value: ${rawValue}`);
 }
 
+function parseBoolean(rawValue, defaultValue = false) {
+  if (rawValue === undefined) {
+    return defaultValue;
+  }
+
+  return rawValue === "true";
+}
+
+function parseHeaderJson(rawHeaders, name) {
+  if (!rawHeaders) {
+    return {};
+  }
+
+  const headers = JSON.parse(rawHeaders);
+
+  if (
+    !headers ||
+    Array.isArray(headers) ||
+    Object.values(headers).some((value) => typeof value !== "string")
+  ) {
+    throw new Error(`${name} must be a JSON object with string values.`);
+  }
+
+  return headers;
+}
+
 function parseWorkerArgs(rawArgs) {
   if (!rawArgs) {
     return [];
@@ -63,7 +94,9 @@ function resolvePath(inputPath) {
 }
 
 export function loadConfig() {
-  const opencvEnabled = process.env.OPENCV_ENABLED === "true";
+  const opencvEnabled = parseBoolean(process.env.OPENCV_ENABLED);
+  const uploadEnabled = parseBoolean(process.env.UPLOAD_ENABLED);
+  const irrigationEnabled = parseBoolean(process.env.IRRIGATION_ENABLED);
 
   return {
     mode: process.env.APP_MODE ?? "development",
@@ -87,6 +120,8 @@ export function loadConfig() {
     },
     features: {
       opencvEnabled,
+      uploadEnabled,
+      irrigationEnabled,
     },
     opencv: {
       enabled: opencvEnabled,
@@ -97,6 +132,47 @@ export function loadConfig() {
         process.env.OPENCV_TIMEOUT_MS,
         DEFAULT_OPENCV_TIMEOUT_MS,
         "OPENCV_TIMEOUT_MS",
+      ),
+    },
+    upload: {
+      enabled: uploadEnabled,
+      url: process.env.UPLOAD_URL ?? null,
+      headers: parseHeaderJson(
+        process.env.UPLOAD_HEADERS_JSON,
+        "UPLOAD_HEADERS_JSON",
+      ),
+      maxAttempts: parsePositiveInteger(
+        process.env.UPLOAD_MAX_ATTEMPTS,
+        DEFAULT_UPLOAD_MAX_ATTEMPTS,
+        "UPLOAD_MAX_ATTEMPTS",
+      ),
+      pollIntervalMs: parsePositiveInteger(
+        process.env.UPLOAD_POLL_INTERVAL_MS,
+        DEFAULT_UPLOAD_POLL_INTERVAL_MS,
+        "UPLOAD_POLL_INTERVAL_MS",
+      ),
+      retryDelayMs: parsePositiveInteger(
+        process.env.UPLOAD_RETRY_DELAY_MS,
+        DEFAULT_UPLOAD_RETRY_DELAY_MS,
+        "UPLOAD_RETRY_DELAY_MS",
+      ),
+      timeoutMs: parsePositiveInteger(
+        process.env.UPLOAD_TIMEOUT_MS,
+        DEFAULT_UPLOAD_TIMEOUT_MS,
+        "UPLOAD_TIMEOUT_MS",
+      ),
+    },
+    irrigation: {
+      enabled: irrigationEnabled,
+      triggerUrl: process.env.IRRIGATION_TRIGGER_URL ?? null,
+      headers: parseHeaderJson(
+        process.env.IRRIGATION_HEADERS_JSON,
+        "IRRIGATION_HEADERS_JSON",
+      ),
+      timeoutMs: parsePositiveInteger(
+        process.env.IRRIGATION_TIMEOUT_MS,
+        DEFAULT_IRRIGATION_TIMEOUT_MS,
+        "IRRIGATION_TIMEOUT_MS",
       ),
     },
   };

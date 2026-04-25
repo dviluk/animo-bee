@@ -17,6 +17,17 @@ const ENV_KEYS = [
   "DB_PATH",
   "LOG_DIR",
   "OPENCV_ENABLED",
+  "UPLOAD_ENABLED",
+  "UPLOAD_URL",
+  "UPLOAD_HEADERS_JSON",
+  "UPLOAD_MAX_ATTEMPTS",
+  "UPLOAD_POLL_INTERVAL_MS",
+  "UPLOAD_RETRY_DELAY_MS",
+  "UPLOAD_TIMEOUT_MS",
+  "IRRIGATION_ENABLED",
+  "IRRIGATION_TRIGGER_URL",
+  "IRRIGATION_HEADERS_JSON",
+  "IRRIGATION_TIMEOUT_MS",
 ];
 
 async function withEnv(overrides, callback) {
@@ -63,6 +74,19 @@ test("loadConfig resolves the default development paths", async () => {
       path.resolve(process.cwd(), "runtime/db/orchestrator.sqlite"),
     );
     assert.equal(config.features.opencvEnabled, false);
+    assert.equal(config.features.uploadEnabled, false);
+    assert.equal(config.features.irrigationEnabled, false);
+    assert.equal(config.upload.enabled, false);
+    assert.equal(config.upload.url, null);
+    assert.deepEqual(config.upload.headers, {});
+    assert.equal(config.upload.maxAttempts, 3);
+    assert.equal(config.upload.pollIntervalMs, 5000);
+    assert.equal(config.upload.retryDelayMs, 30000);
+    assert.equal(config.upload.timeoutMs, 60000);
+    assert.equal(config.irrigation.enabled, false);
+    assert.equal(config.irrigation.triggerUrl, null);
+    assert.deepEqual(config.irrigation.headers, {});
+    assert.equal(config.irrigation.timeoutMs, 10000);
   });
 });
 
@@ -79,6 +103,17 @@ test("loadConfig respects explicit runtime overrides", async () => {
       DB_PATH: "/tmp/orchestrator.sqlite",
       LOG_DIR: "/tmp/logs",
       OPENCV_ENABLED: "true",
+      UPLOAD_ENABLED: "true",
+      UPLOAD_URL: "https://example.test/upload",
+      UPLOAD_HEADERS_JSON: '{"x-api-key":"token"}',
+      UPLOAD_MAX_ATTEMPTS: "5",
+      UPLOAD_POLL_INTERVAL_MS: "2000",
+      UPLOAD_RETRY_DELAY_MS: "15000",
+      UPLOAD_TIMEOUT_MS: "45000",
+      IRRIGATION_ENABLED: "true",
+      IRRIGATION_TRIGGER_URL: "https://example.test/irrigation",
+      IRRIGATION_HEADERS_JSON: '{"authorization":"Bearer t"}',
+      IRRIGATION_TIMEOUT_MS: "7000",
     },
     async () => {
       const config = loadConfig();
@@ -95,6 +130,24 @@ test("loadConfig respects explicit runtime overrides", async () => {
       assert.equal(config.paths.dbPath, "/tmp/orchestrator.sqlite");
       assert.equal(config.paths.logDir, "/tmp/logs");
       assert.equal(config.features.opencvEnabled, true);
+      assert.equal(config.features.uploadEnabled, true);
+      assert.equal(config.features.irrigationEnabled, true);
+      assert.equal(config.upload.enabled, true);
+      assert.equal(config.upload.url, "https://example.test/upload");
+      assert.deepEqual(config.upload.headers, { "x-api-key": "token" });
+      assert.equal(config.upload.maxAttempts, 5);
+      assert.equal(config.upload.pollIntervalMs, 2000);
+      assert.equal(config.upload.retryDelayMs, 15000);
+      assert.equal(config.upload.timeoutMs, 45000);
+      assert.equal(config.irrigation.enabled, true);
+      assert.equal(
+        config.irrigation.triggerUrl,
+        "https://example.test/irrigation",
+      );
+      assert.deepEqual(config.irrigation.headers, {
+        authorization: "Bearer t",
+      });
+      assert.equal(config.irrigation.timeoutMs, 7000);
     },
   );
 });
@@ -102,6 +155,24 @@ test("loadConfig respects explicit runtime overrides", async () => {
 test("loadConfig rejects invalid port values", async () => {
   await withEnv({ PORT: "invalid" }, async () => {
     assert.throws(() => loadConfig(), /Invalid PORT value: invalid/);
+  });
+});
+
+test("loadConfig rejects invalid upload headers format", async () => {
+  await withEnv({ UPLOAD_HEADERS_JSON: "[]" }, async () => {
+    assert.throws(
+      () => loadConfig(),
+      /UPLOAD_HEADERS_JSON must be a JSON object with string values/,
+    );
+  });
+});
+
+test("loadConfig rejects invalid irrigation headers format", async () => {
+  await withEnv({ IRRIGATION_HEADERS_JSON: "[]" }, async () => {
+    assert.throws(
+      () => loadConfig(),
+      /IRRIGATION_HEADERS_JSON must be a JSON object with string values/,
+    );
   });
 });
 

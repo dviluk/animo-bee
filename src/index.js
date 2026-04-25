@@ -1,12 +1,15 @@
-import { createServer } from "node:http";
 import { pathToFileURL } from "node:url";
+import { createControlApiServer } from "./api/server.js";
 import { ensureRuntimeDirectories, loadConfig } from "./config/index.js";
 import {
   CLIP_DETECTED_EVENT,
   startClipWatcher,
 } from "./services/file-watcher.js";
 import { OpenCvWorkerClient } from "./services/opencv-worker-client.js";
+import { ConfigManager } from "./services/config-manager.js";
+import { IrrigationController } from "./services/irrigation-controller.js";
 import { createQueueManager } from "./services/queue-manager.js";
+import { UploadWorker } from "./services/upload-worker.js";
 
 function logClipDetected(event) {
   console.log(JSON.stringify({ event: CLIP_DETECTED_EVENT, data: event }));
@@ -61,76 +64,85 @@ async function handleClipDetected(event, services) {
   }
 }
 
-export function createAppServer(config) {
-  return createServer((request, response) => {
-    if (request.method === "GET" && request.url === "/health") {
-      response.writeHead(200, {
-        "content-type": "application/json; charset=utf-8",
-      });
-      response.end(
-        JSON.stringify({
-          data: {
-            status: "ok",
-            service: "animo-bee",
-            mode: config.mode,
-            host: config.server.host,
-            port: config.server.port,
-            opencvEnabled: config.features.opencvEnabled,
-            paths: {
-              cameraSources: config.paths.cameraSources,
-              processedDir: config.paths.processedDir,
-              rejectedDir: config.paths.rejectedDir,
-            },
-          },
-        }),
-      );
-      return;
-    }
+function supportsRuntimeConfig(queueManager) {
+  return (
+    typeof queueManager?.getRuntimeConfig === "function" &&
+    typeof queueManager?.setRuntimeConfig === "function"
+  );
+}
 
-    if (request.method === "GET" && request.url === "/") {
-      response.writeHead(200, {
-        "content-type": "application/json; charset=utf-8",
-      });
-      response.end(
-        JSON.stringify({
-          data: {
-            message: "animo-bee scaffold is running",
-          },
-        }),
-      );
-      return;
-    }
+function supportsUploadWorker(queueManager) {
+  return (
+    typeof queueManager?.getNextQueuedClip === "function" &&
+    typeof queueManager?.markUploading === "function" &&
+    typeof queueManager?.completeUpload === "function"
+  );
+}
 
-    response.writeHead(404, {
-      "content-type": "application/json; charset=utf-8",
-    });
-    response.end(
-      JSON.stringify({
-        error: "Not Found",
-      }),
-    );
-  });
+function supportsIrrigationController(queueManager) {
+  return typeof queueManager?.recordIrrigationEvent === "function";
+}
+
+export function createAppServer(config, services = {}) {
+  return createControlApiServer(config, services);
 }
 
 export async function startServer(config = loadConfig(), options = {}) {
-  const server = createAppServer(config);
   const startWatcher = options.startWatcher ?? true;
   const startQueue = options.startQueue ?? true;
+  const startUploadWorker = options.startUploadWorker ?? true;
+
+  let queueManager = null;
+  let configManager = null;
+  let uploadWorker = null;
+  let irrigationController = null;
+  let resumableClips = [];
 
   await ensureRuntimeDirectories(config);
 
   if (startQueue) {
-    server.queueManager =
-      options.queueManager ?? (await createQueueManager(config));
-    server.resumableClips = await server.queueManager.recoverPendingWork();
+    queueManager = options.queueManager ?? (await createQueueManager(config));
+    resumableClips = await queueManager.recoverPendingWork();
 
     if (options.onRecoveredClips) {
-      await options.onRecoveredClips(server.resumableClips);
+      await options.onRecoveredClips(resumableClips);
+    }
+
+    if (supportsRuntimeConfig(queueManager)) {
+      configManager =
+        options.configManager ?? new ConfigManager(config, queueManager);
+      await configManager.hydrate();
+    }
+
+    if (supportsUploadWorker(queueManager)) {
+      uploadWorker =
+        options.uploadWorker ?? new UploadWorker(config, queueManager);
+    }
+
+    if (supportsIrrigationController(queueManager)) {
+      irrigationController =
+        options.irrigationController ??
+        new IrrigationController(config, queueManager);
     }
   }
 
-  server.opencvWorkerClient =
+  const opencvWorkerClient =
     options.opencvWorkerClient ?? new OpenCvWorkerClient(config);
+
+  const server = createAppServer(config, {
+    queueManager,
+    configManager,
+    uploadWorker,
+    irrigationController,
+    opencvWorkerClient,
+  });
+
+  server.queueManager = queueManager;
+  server.configManager = configManager;
+  server.uploadWorker = uploadWorker;
+  server.irrigationController = irrigationController;
+  server.opencvWorkerClient = opencvWorkerClient;
+  server.resumableClips = resumableClips;
 
   const onClipDetected =
     options.onClipDetected ??
@@ -147,6 +159,10 @@ export async function startServer(config = loadConfig(), options = {}) {
     server.clipWatcher = await startClipWatcher(config, { onClipDetected });
   }
 
+  if (startUploadWorker) {
+    server.uploadWorker?.start();
+  }
+
   await new Promise((resolve) => {
     server.listen(config.server.port, config.server.host, resolve);
   });
@@ -156,6 +172,7 @@ export async function startServer(config = loadConfig(), options = {}) {
 
 export async function stopServer(server) {
   await server.clipWatcher?.stop();
+  await server.uploadWorker?.stop();
   await server.queueManager?.close();
 
   await new Promise((resolve, reject) => {

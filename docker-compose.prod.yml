@@ -15,6 +15,21 @@ services:
       DB_PATH: /app/runtime/db/${ANIMO_BEE_DB_FILE:-orchestrator.sqlite}
       LOG_DIR: /app/runtime/logs
       OPENCV_ENABLED: ${ANIMO_BEE_OPENCV_ENABLED:-false}
+      OPENCV_WORKER_COMMAND: ${OPENCV_WORKER_COMMAND:-}
+      OPENCV_WORKER_ARGS: ${OPENCV_WORKER_ARGS:-[]}
+      OPENCV_WORKER_URL: ${OPENCV_WORKER_URL:-}
+      OPENCV_TIMEOUT_MS: ${OPENCV_TIMEOUT_MS:-30000}
+      UPLOAD_ENABLED: ${UPLOAD_ENABLED:-false}
+      UPLOAD_URL: ${UPLOAD_URL:-}
+      UPLOAD_HEADERS_JSON: ${UPLOAD_HEADERS_JSON:-{}}
+      UPLOAD_MAX_ATTEMPTS: ${UPLOAD_MAX_ATTEMPTS:-3}
+      UPLOAD_POLL_INTERVAL_MS: ${UPLOAD_POLL_INTERVAL_MS:-5000}
+      UPLOAD_RETRY_DELAY_MS: ${UPLOAD_RETRY_DELAY_MS:-30000}
+      UPLOAD_TIMEOUT_MS: ${UPLOAD_TIMEOUT_MS:-60000}
+      IRRIGATION_ENABLED: ${IRRIGATION_ENABLED:-false}
+      IRRIGATION_TRIGGER_URL: ${IRRIGATION_TRIGGER_URL:-}
+      IRRIGATION_HEADERS_JSON: ${IRRIGATION_HEADERS_JSON:-{}}
+      IRRIGATION_TIMEOUT_MS: ${IRRIGATION_TIMEOUT_MS:-10000}
     ports:
       - "${ANIMO_BEE_APP_PORT:-3001}:${ANIMO_BEE_APP_PORT:-3001}"
     volumes:
@@ -53,6 +68,10 @@ services:
       DB_PATH: /app/runtime/db/${ANIMO_BEE_DB_FILE:-orchestrator.sqlite}
       LOG_DIR: /app/runtime/logs
       OPENCV_ENABLED: "true"
+      OPENCV_WORKER_COMMAND: ${OPENCV_WORKER_COMMAND:-}
+      OPENCV_WORKER_ARGS: ${OPENCV_WORKER_ARGS:-[]}
+      OPENCV_WORKER_URL: ${OPENCV_WORKER_URL:-}
+      OPENCV_TIMEOUT_MS: ${OPENCV_TIMEOUT_MS:-30000}
     volumes:
       - ${ANIMO_BEE_RUNTIME_ROOT:-/mnt/bee-disk/projects/animo-bee}/data/camera_1:/app/runtime/camera_1
       - ${ANIMO_BEE_RUNTIME_ROOT:-/mnt/bee-disk/projects/animo-bee}/data/camera_2:/app/runtime/camera_2
