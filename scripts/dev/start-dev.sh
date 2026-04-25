@@ -19,5 +19,6 @@ fi
 printf 'Native camera software should write clips into:\n'
 printf '  %s\n' "$project_root/runtime/camera_1"
 printf '  %s\n' "$project_root/runtime/camera_2"
+printf '\nIMPORTANT: Ensure native Motion is started on the host BEFORE running this Dockerized orchestrator.\n'
 
 docker compose --env-file .env -f docker-compose.dev.yml up --build
