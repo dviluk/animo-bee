@@ -1,0 +1,21 @@
+{
+  "name": "animo-bee",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Edge orchestrator scaffold for motionEye clip intake and local queue management.",
+  "type": "module",
+  "engines": {
+    "node": "20.x"
+  },
+  "scripts": {
+    "dev": "node --watch src/index.js",
+    "start": "node src/index.js",
+    "test": "node --test",
+    "lint": "node --check src/index.js && node --check src/config/index.js",
+    "docker:dev": "./scripts/dev/start-dev.sh",
+    "docker:dev:down": "docker compose --env-file .env -f docker-compose.dev.yml down"
+  },
+  "dependencies": {
+    "dotenv": "^16.6.1"
+  }
+}

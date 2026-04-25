@@ -1,0 +1,27 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: npm run dev
+    env_file:
+      - path: .env
+        required: false
+      - path: .env.example
+        required: true
+    ports:
+      - "3001:3001"
+    volumes:
+      - ./src:/app/src
+      - ./runtime:/app/runtime
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "curl -fsS http://localhost:${PORT:-3001}/health || exit 1",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
