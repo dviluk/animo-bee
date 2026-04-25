@@ -45,13 +45,11 @@ export function shouldIgnoreClipFile(filePath) {
   );
 }
 
-export async function waitForStableFile(
-  filePath,
-  options = {},
-) {
+export async function waitForStableFile(filePath, options = {}) {
   const attempts = options.attempts ?? DEFAULT_STABILITY_ATTEMPTS;
   const delayMs = options.delayMs ?? DEFAULT_STABILITY_DELAY_MS;
   let previousSize = -1;
+  let previousMtimeMs = -1;
   let lastStats = null;
 
   for (let attempt = 0; attempt < attempts; attempt += 1) {
@@ -61,11 +59,16 @@ export async function waitForStableFile(
       throw new Error(`Path is not a file: ${filePath}`);
     }
 
-    if (stats.size > 0 && stats.size === previousSize) {
+    if (
+      stats.size > 0 &&
+      stats.size === previousSize &&
+      stats.mtimeMs === previousMtimeMs
+    ) {
       return stats;
     }
 
     previousSize = stats.size;
+    previousMtimeMs = stats.mtimeMs;
     lastStats = stats;
 
     if (attempt < attempts - 1) {
@@ -120,7 +123,7 @@ export class ClipWatcher {
     this.watcher = chokidar.watch(this.cameraSources, {
       awaitWriteFinish: false,
       depth: undefined,
-      ignoreInitial: false,
+      ignoreInitial: true,
       ignored: (filePath) => shouldIgnoreClipFile(filePath),
       persistent: true,
     });

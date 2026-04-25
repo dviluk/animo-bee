@@ -1,10 +1,64 @@
 import { createServer } from "node:http";
 import { pathToFileURL } from "node:url";
 import { ensureRuntimeDirectories, loadConfig } from "./config/index.js";
-import { CLIP_DETECTED_EVENT, startClipWatcher } from "./services/file-watcher.js";
+import {
+  CLIP_DETECTED_EVENT,
+  startClipWatcher,
+} from "./services/file-watcher.js";
+import { OpenCvWorkerClient } from "./services/opencv-worker-client.js";
+import { createQueueManager } from "./services/queue-manager.js";
 
 function logClipDetected(event) {
   console.log(JSON.stringify({ event: CLIP_DETECTED_EVENT, data: event }));
+}
+
+function logClipQueued(clip) {
+  console.log(
+    JSON.stringify({
+      event: "clip_queued",
+      data: {
+        id: clip.id,
+        status: clip.status,
+        originalPath: clip.originalPath,
+      },
+    }),
+  );
+}
+
+async function handleClipDetected(event, services) {
+  const { config, opencvWorkerClient, queueManager } = services;
+  const { clip, created } = await queueManager.enqueueClip(event, {
+    opencvEnabled: config.features.opencvEnabled,
+  });
+
+  if (!created) {
+    return clip;
+  }
+
+  let activeClip = clip;
+
+  try {
+    if (config.features.opencvEnabled) {
+      activeClip = await queueManager.markProcessing(clip.id);
+    }
+
+    const decision = await opencvWorkerClient.decideClip(activeClip);
+    const finalClip =
+      decision.decision === "rejected"
+        ? await queueManager.rejectClip(
+            activeClip.id,
+            decision,
+            config.paths.rejectedDir,
+          )
+        : await queueManager.acceptClip(activeClip.id, decision);
+
+    logClipQueued(finalClip);
+
+    return finalClip;
+  } catch (error) {
+    await queueManager.failClip(activeClip.id, error);
+    throw error;
+  }
 }
 
 export function createAppServer(config) {
@@ -61,9 +115,29 @@ export function createAppServer(config) {
 export async function startServer(config = loadConfig(), options = {}) {
   const server = createAppServer(config);
   const startWatcher = options.startWatcher ?? true;
-  const onClipDetected = options.onClipDetected ?? logClipDetected;
+  const startQueue = options.startQueue ?? true;
 
   await ensureRuntimeDirectories(config);
+
+  if (startQueue) {
+    server.queueManager =
+      options.queueManager ?? (await createQueueManager(config));
+    await server.queueManager.recoverPendingWork();
+  }
+
+  server.opencvWorkerClient =
+    options.opencvWorkerClient ?? new OpenCvWorkerClient(config);
+
+  const onClipDetected =
+    options.onClipDetected ??
+    (server.queueManager
+      ? (event) =>
+          handleClipDetected(event, {
+            config,
+            opencvWorkerClient: server.opencvWorkerClient,
+            queueManager: server.queueManager,
+          })
+      : logClipDetected);
 
   if (startWatcher) {
     server.clipWatcher = await startClipWatcher(config, { onClipDetected });
@@ -78,6 +152,7 @@ export async function startServer(config = loadConfig(), options = {}) {
 
 export async function stopServer(server) {
   await server.clipWatcher?.stop();
+  await server.queueManager?.close();
 
   await new Promise((resolve, reject) => {
     server.close((error) => {

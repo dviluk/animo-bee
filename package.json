@@ -11,12 +11,13 @@
     "dev": "node --watch src/index.js",
     "start": "node src/index.js",
     "test": "node --test",
-    "lint": "node --check src/index.js && node --check src/config/index.js && node --check src/services/file-watcher.js",
+    "lint": "node --check src/index.js && node --check src/config/index.js && node --check src/services/file-watcher.js && node --check src/services/queue-manager.js && node --check src/services/opencv-worker-client.js",
     "docker:dev": "./scripts/dev/start-dev.sh",
     "docker:dev:down": "docker compose --env-file .env -f docker-compose.dev.yml down"
   },
   "dependencies": {
     "chokidar": "^4.0.3",
-    "dotenv": "^16.6.1"
+    "dotenv": "^16.6.1",
+    "sql.js": "^1.13.0"
   }
 }

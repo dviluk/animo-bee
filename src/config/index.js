@@ -6,6 +6,7 @@ dotenv.config();
 
 const DEFAULT_HOST = "0.0.0.0";
 const DEFAULT_PORT = 3001;
+const DEFAULT_OPENCV_TIMEOUT_MS = 30000;
 const DEFAULT_PATHS = {
   camera1: "./runtime/camera_1",
   camera2: "./runtime/camera_2",
@@ -25,6 +26,30 @@ function parsePort(rawPort) {
   throw new Error(`Invalid PORT value: ${rawPort}`);
 }
 
+function parsePositiveInteger(rawValue, defaultValue, name) {
+  const value = Number.parseInt(rawValue ?? `${defaultValue}`, 10);
+
+  if (Number.isInteger(value) && value > 0) {
+    return value;
+  }
+
+  throw new Error(`Invalid ${name} value: ${rawValue}`);
+}
+
+function parseWorkerArgs(rawArgs) {
+  if (!rawArgs) {
+    return [];
+  }
+
+  const args = JSON.parse(rawArgs);
+
+  if (!Array.isArray(args) || args.some((arg) => typeof arg !== "string")) {
+    throw new Error("OPENCV_WORKER_ARGS must be a JSON string array.");
+  }
+
+  return args;
+}
+
 function resolvePath(inputPath) {
   if (!inputPath) {
     throw new Error("Missing runtime path configuration.");
@@ -38,6 +63,8 @@ function resolvePath(inputPath) {
 }
 
 export function loadConfig() {
+  const opencvEnabled = process.env.OPENCV_ENABLED === "true";
+
   return {
     mode: process.env.APP_MODE ?? "development",
     server: {
@@ -59,7 +86,18 @@ export function loadConfig() {
       logDir: resolvePath(process.env.LOG_DIR ?? DEFAULT_PATHS.logs),
     },
     features: {
-      opencvEnabled: process.env.OPENCV_ENABLED === "true",
+      opencvEnabled,
+    },
+    opencv: {
+      enabled: opencvEnabled,
+      workerCommand: process.env.OPENCV_WORKER_COMMAND ?? null,
+      workerArgs: parseWorkerArgs(process.env.OPENCV_WORKER_ARGS),
+      workerUrl: process.env.OPENCV_WORKER_URL ?? null,
+      timeoutMs: parsePositiveInteger(
+        process.env.OPENCV_TIMEOUT_MS,
+        DEFAULT_OPENCV_TIMEOUT_MS,
+        "OPENCV_TIMEOUT_MS",
+      ),
     },
   };
 }

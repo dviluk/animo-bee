@@ -77,6 +77,30 @@ test("waitForStableFile returns stats for stable non-empty files", async () => {
   assert.equal(stats.size, 3);
 });
 
+test("waitForStableFile waits for same-size rewrites to stop changing", async () => {
+  const filePath = path.join(
+    await fs.mkdtemp(path.join(os.tmpdir(), "animo-bee-same-size-")),
+    "clip.mp4",
+  );
+
+  await fs.writeFile(filePath, "aa");
+  setTimeout(() => {
+    void fs.writeFile(filePath, "bb");
+  }, 5);
+
+  const stats = await waitForStableFile(filePath, {
+    attempts: 6,
+    delayMs: 20,
+  });
+
+  const finalStats = await fs.stat(filePath);
+  const content = await fs.readFile(filePath, "utf8");
+
+  assert.equal(content, "bb");
+  assert.equal(stats.size, 2);
+  assert.equal(stats.mtimeMs, finalStats.mtimeMs);
+});
+
 test("waitForStableFile rejects empty files", async () => {
   const filePath = path.join(
     await fs.mkdtemp(path.join(os.tmpdir(), "animo-bee-empty-")),
@@ -155,6 +179,39 @@ test("ClipWatcher emits one event per stable file and dedupes repeated changes",
   assert.equal(errors.length, 0);
 });
 
+test("ClipWatcher ignores files that already exist before startup", async (t) => {
+  const { config, camera1 } = await createCameraConfig();
+  const events = [];
+  const errors = [];
+  const existingFile = path.join(camera1, "existing.mp4");
+
+  await fs.writeFile(existingFile, "payload");
+
+  const watcher = new ClipWatcher(config, {
+    onClipDetected: async (event) => {
+      events.push(event);
+    },
+    onError: (error) => {
+      errors.push(error);
+    },
+    stability: {
+      attempts: 3,
+      delayMs: 15,
+    },
+  });
+
+  await watcher.start();
+
+  t.after(async () => {
+    await watcher.stop();
+  });
+
+  await delay(200);
+
+  assert.equal(events.length, 0);
+  assert.equal(errors.length, 0);
+});
+
 test("ClipWatcher ignores temp files and retries zero-byte files on later change", async (t) => {
   const { config, camera1 } = await createCameraConfig();
   const events = [];
@@ -198,7 +255,8 @@ test("ClipWatcher ignores temp files and retries zero-byte files on later change
   await fs.writeFile(emptyFile, "payload");
 
   await waitForCondition(
-    () => events.some((event) => event.originalPath === path.resolve(emptyFile)),
+    () =>
+      events.some((event) => event.originalPath === path.resolve(emptyFile)),
     {
       timeoutMs: 3000,
       message: "Expected watcher to emit event after file gained content.",
