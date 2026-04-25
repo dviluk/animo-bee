@@ -32,15 +32,11 @@ else
 fi
 
 echo ""
-echo "=== Motion Config Parsing ==="
-if command -v motion >/dev/null; then
-    if [ -f "$CONFIG_DIR/motion.conf" ]; then
-        echo "Found motion.conf. (Syntax checking without starting the daemon requires parsing the setup log. Verify configurations manually)."
-    else
-         echo "motion.conf not available for testing."
-    fi
+echo "=== motionEye State (Conda) ==="
+if pgrep -x "meyectl" >/dev/null; then
+    echo "motionEye meyectl process is currently running."
 else
-    echo "motion binary not found."
+    echo "motionEye meyectl process is inactive or not found."
 fi
 
 echo ""

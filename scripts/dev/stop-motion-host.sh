@@ -5,19 +5,11 @@
 
 set -euo pipefail
 
-echo "=== Stopping motionEye Service ==="
+echo "=== Stopping motionEye Service (Conda) ==="
 
-if systemctl status motioneye >/dev/null 2>&1; then
-    echo "motionEye service is running. Stopping via systemctl..."
-    systemctl stop motioneye
-    echo "motionEye stopped."
-else
-    echo "motionEye service is not running via systemd."
-fi
-
-# Fallback: check if meyectl or motion are running independently
+# Check if meyectl or motion are running independently
 if pgrep -x "meyectl" >/dev/null || pgrep -x "motion" >/dev/null; then
-    echo "Found rogue meyectl or motion processes. Sending SIGTERM..."
+    echo "Found active meyectl or motion processes. Sending SIGTERM..."
     pkill -x -TERM "meyectl" || true
     pkill -x -TERM "motion" || true
     
@@ -36,5 +28,5 @@ if pgrep -x "meyectl" >/dev/null || pgrep -x "motion" >/dev/null; then
     fi
     echo "All motion and motionEye processes stopped cleanly."
 else
-    echo "No rogue motion or motionEye processes found."
+    echo "No running motion or motionEye processes found."
 fi
