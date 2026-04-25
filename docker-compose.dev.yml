@@ -14,11 +14,7 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
-      - ./src:/app/src
-      - ./tests:/app/tests
-      - ./scripts:/app/scripts
-      - ./runtime:/app/runtime
-      - ./node_modules:/app/node_modules
+      - .:/app/
     restart: unless-stopped
     healthcheck:
       test:
