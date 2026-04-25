@@ -46,6 +46,20 @@ function normalizeNumber(value, name) {
   return value;
 }
 
+function createValidationError(message) {
+  return Object.assign(new Error(message), {
+    statusCode: 422,
+  });
+}
+
+function hasWorkerContract(config, workerConfiguredOverride) {
+  if (typeof workerConfiguredOverride === "boolean") {
+    return workerConfiguredOverride;
+  }
+
+  return Boolean(config?.opencv?.workerUrl ?? config?.opencv?.workerCommand);
+}
+
 export class ConfigManager {
   constructor(config, queueManager) {
     this.config = config;
@@ -134,7 +148,7 @@ export class ConfigManager {
     return this.getOpenCvRuntime().enabled;
   }
 
-  async setOpenCvRuntime(payload = {}) {
+  async setOpenCvRuntime(payload = {}, options = {}) {
     if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
       throw new Error("payload must be an object.");
     }
@@ -150,9 +164,7 @@ export class ConfigManager {
 
     const next = {
       mode: nextMode,
-      enabled: hasOwn(payload, "enabled")
-        ? normalizeBoolean(payload.enabled, "enabled")
-        : nextMode !== "disabled",
+      enabled: nextMode !== "disabled",
       failOpen: hasOwn(payload, "failOpen")
         ? normalizeBoolean(payload.failOpen, "failOpen")
         : current.failOpen,
@@ -172,6 +184,17 @@ export class ConfigManager {
         ? normalizeNumber(payload.minRoiMotionScore, "minRoiMotionScore")
         : current.minRoiMotionScore,
     };
+
+    const workerConfigured = hasWorkerContract(
+      this.config,
+      options.workerConfigured,
+    );
+
+    if (next.mode !== "disabled" && !workerConfigured) {
+      throw createValidationError(
+        "OpenCV mode requires OPENCV_WORKER_URL or OPENCV_WORKER_COMMAND.",
+      );
+    }
 
     await this.queueManager.setRuntimeConfig(OPENCV_MODE_KEY, next.mode);
     await this.queueManager.setRuntimeConfig(OPENCV_ENABLED_KEY, next.enabled);
@@ -199,10 +222,13 @@ export class ConfigManager {
     return this.applyOpenCvRuntime(next);
   }
 
-  async setOpenCvEnabled(value) {
-    const runtime = await this.setOpenCvRuntime({
-      enabled: normalizeBoolean(value, "enabled"),
-    });
+  async setOpenCvEnabled(value, options = {}) {
+    const runtime = await this.setOpenCvRuntime(
+      {
+        enabled: normalizeBoolean(value, "enabled"),
+      },
+      options,
+    );
 
     return runtime.enabled;
   }

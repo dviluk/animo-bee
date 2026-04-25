@@ -61,6 +61,31 @@ async function pathExists(targetPath) {
   }
 }
 
+const LEGACY_SCHEMA = `
+CREATE TABLE IF NOT EXISTS clips (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_camera TEXT NOT NULL,
+    original_path TEXT NOT NULL,
+    current_path TEXT NOT NULL,
+    stable_at TEXT NOT NULL,
+    status TEXT NOT NULL,
+    checksum TEXT,
+    size_bytes INTEGER,
+    mtime_ms REAL,
+    opencv_enabled INTEGER NOT NULL DEFAULT 0 CHECK (opencv_enabled IN (0, 1)),
+    decision TEXT,
+    decision_reason TEXT,
+    metadata_json TEXT,
+    queued_at TEXT,
+    uploaded_at TEXT,
+    routed_at TEXT,
+    failure_reason TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE (original_path, stable_at)
+);
+`;
+
 test("QueueManager initializes required SQLite tables", async (t) => {
   const runtime = await createRuntimeConfig();
   const queueManager = await createQueueManager(runtime.config);
@@ -78,6 +103,85 @@ test("QueueManager initializes required SQLite tables", async (t) => {
     (tableName) => {
       assert.equal(tableNames.includes(tableName), true);
     },
+  );
+});
+
+test("QueueManager upgrades legacy SQLite files and enforces OpenCV lifecycle contract", async (t) => {
+  const runtime = await createRuntimeConfig();
+  const legacySchemaPath = path.join(runtime.root, "legacy-schema.sql");
+
+  await fs.writeFile(legacySchemaPath, LEGACY_SCHEMA);
+
+  const legacyQueueManager = await createQueueManager(runtime.config, {
+    schemaPath: legacySchemaPath,
+  });
+  await legacyQueueManager.close();
+
+  const queueManager = await createQueueManager(runtime.config);
+
+  t.after(async () => {
+    await queueManager.close();
+    await fs.rm(runtime.root, { force: true, recursive: true });
+  });
+
+  const clipColumns = queueManager
+    .getRows("PRAGMA table_info(clips)")
+    .map((column) => column.name);
+
+  [
+    "opencv_mode",
+    "opencv_status",
+    "opencv_decision",
+    "opencv_reason",
+    "opencv_scores_json",
+    "opencv_error",
+    "opencv_processed_at",
+  ].forEach((columnName) => {
+    assert.equal(clipColumns.includes(columnName), true);
+  });
+
+  const { event } = await createClipEvent(
+    runtime.camera1,
+    "clip-legacy-upgrade.mp4",
+    "legacy",
+  );
+
+  const { clip } = await queueManager.enqueueClip(event, {
+    checksum: "legacy-upgrade",
+    opencvEnabled: false,
+  });
+
+  assert.throws(
+    () =>
+      queueManager.run(
+        "UPDATE clips SET opencv_mode = 'invalid' WHERE id = $id",
+        {
+          $id: clip.id,
+        },
+      ),
+    /Invalid OpenCV lifecycle value/,
+  );
+
+  assert.throws(
+    () =>
+      queueManager.run(
+        "UPDATE clips SET opencv_status = 'unknown' WHERE id = $id",
+        {
+          $id: clip.id,
+        },
+      ),
+    /Invalid OpenCV lifecycle value/,
+  );
+
+  assert.throws(
+    () =>
+      queueManager.run(
+        "UPDATE clips SET opencv_decision = 'invalid' WHERE id = $id",
+        {
+          $id: clip.id,
+        },
+      ),
+    /Invalid OpenCV lifecycle value/,
   );
 });
 

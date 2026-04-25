@@ -40,6 +40,13 @@ const ALLOWED_TRANSITIONS = Object.freeze({
 });
 
 const OPENCV_MODES = new Set(["disabled", "shadow", "enforce"]);
+const OPENCV_STATUSES = new Set([
+  "skipped",
+  "pending",
+  "processing",
+  "completed",
+  "failed",
+]);
 const OPENCV_DECISIONS = new Set(["accept", "reject", "maybe"]);
 
 const UPDATE_FIELDS = Object.freeze({
@@ -110,6 +117,18 @@ function normalizeOpenCvDecision(value, fallback = "accept") {
   }
 
   throw new Error(`Unknown OpenCV decision: ${decision}`);
+}
+
+function normalizeOpenCvStatus(value) {
+  if (value === undefined || value === null) {
+    return null;
+  }
+
+  if (OPENCV_STATUSES.has(value)) {
+    return value;
+  }
+
+  throw new Error(`Unknown OpenCV status: ${value}`);
 }
 
 function serializeJson(value) {
@@ -383,6 +402,55 @@ export class QueueManager {
       if (!clipColumns.has(column)) {
         this.run(sql);
       }
+    });
+
+    this.ensureOpenCvContractTriggers();
+  }
+
+  ensureOpenCvContractTriggers() {
+    const triggerStatements = [
+      `
+        CREATE TRIGGER IF NOT EXISTS clips_opencv_contract_insert
+        BEFORE INSERT ON clips
+        FOR EACH ROW
+        WHEN
+          NEW.opencv_mode IS NULL
+          OR NEW.opencv_mode NOT IN ('disabled', 'shadow', 'enforce')
+          OR (
+            NEW.opencv_status IS NOT NULL
+            AND NEW.opencv_status NOT IN ('skipped', 'pending', 'processing', 'completed', 'failed')
+          )
+          OR (
+            NEW.opencv_decision IS NOT NULL
+            AND NEW.opencv_decision NOT IN ('accept', 'reject', 'maybe')
+          )
+        BEGIN
+          SELECT RAISE(ABORT, 'Invalid OpenCV lifecycle value');
+        END;
+      `,
+      `
+        CREATE TRIGGER IF NOT EXISTS clips_opencv_contract_update
+        BEFORE UPDATE OF opencv_mode, opencv_status, opencv_decision ON clips
+        FOR EACH ROW
+        WHEN
+          NEW.opencv_mode IS NULL
+          OR NEW.opencv_mode NOT IN ('disabled', 'shadow', 'enforce')
+          OR (
+            NEW.opencv_status IS NOT NULL
+            AND NEW.opencv_status NOT IN ('skipped', 'pending', 'processing', 'completed', 'failed')
+          )
+          OR (
+            NEW.opencv_decision IS NOT NULL
+            AND NEW.opencv_decision NOT IN ('accept', 'reject', 'maybe')
+          )
+        BEGIN
+          SELECT RAISE(ABORT, 'Invalid OpenCV lifecycle value');
+        END;
+      `,
+    ];
+
+    triggerStatements.forEach((sql) => {
+      this.run(sql);
     });
   }
 
@@ -752,6 +820,11 @@ export class QueueManager {
 
       if (fieldName === "opencvDecision") {
         params[paramName] = normalizeOpenCvDecision(fieldValue);
+        return;
+      }
+
+      if (fieldName === "opencvStatus") {
+        params[paramName] = normalizeOpenCvStatus(fieldValue);
         return;
       }
 

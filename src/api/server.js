@@ -9,6 +9,15 @@ function sendJson(response, statusCode, payload) {
   response.end(JSON.stringify(payload));
 }
 
+function isOpenCvWorkerConfigured(config, services) {
+  return Boolean(
+    services.opencvWorkerClient?.workerUrl ??
+    services.opencvWorkerClient?.workerCommand ??
+    config.opencv?.workerUrl ??
+    config.opencv?.workerCommand,
+  );
+}
+
 function getOpenCvRuntime(config, services) {
   const fallbackMode =
     config.opencv?.mode ??
@@ -46,12 +55,7 @@ function getOpenCvRuntime(config, services) {
     ...runtime,
     mode,
     enabled,
-    workerConfigured: Boolean(
-      services.opencvWorkerClient?.workerUrl ??
-      services.opencvWorkerClient?.workerCommand ??
-      config.opencv?.workerUrl ??
-      config.opencv?.workerCommand,
-    ),
+    workerConfigured: isOpenCvWorkerConfigured(config, services),
   };
 }
 
@@ -232,10 +236,14 @@ async function handleRequest(request, response, config, services) {
       return;
     }
 
+    const workerConfigured = isOpenCvWorkerConfigured(config, services);
+
     const runtime = await (isLegacyTogglePayload
       ? (() => {
           const enabled = services.configManager.setOpenCvEnabled
-            ? services.configManager.setOpenCvEnabled(payload.enabled)
+            ? services.configManager.setOpenCvEnabled(payload.enabled, {
+                workerConfigured,
+              })
             : Promise.resolve(Boolean(payload.enabled));
 
           return Promise.resolve(enabled).then((nextEnabled) =>
@@ -248,7 +256,9 @@ async function handleRequest(request, response, config, services) {
           );
         })()
       : services.configManager.setOpenCvRuntime
-        ? await services.configManager.setOpenCvRuntime(payload)
+        ? await services.configManager.setOpenCvRuntime(payload, {
+            workerConfigured,
+          })
         : null);
 
     if (!runtime) {

@@ -8,6 +8,7 @@ import {
   startServer,
   stopServer,
 } from "../src/index.js";
+import { ConfigManager } from "../src/services/config-manager.js";
 
 function buildConfig() {
   return {
@@ -281,6 +282,7 @@ test("POST /config/opencv toggles OpenCV runtime state", async (t) => {
 
 test("POST /config/opencv accepts runtime payload and applies worker runtime config", async (t) => {
   let capturedPayload = null;
+  let capturedOptions = null;
   let appliedRuntime = null;
 
   const runtime = {
@@ -294,12 +296,14 @@ test("POST /config/opencv accepts runtime payload and applies worker runtime con
   };
 
   const configManager = {
-    setOpenCvRuntime: async (payload) => {
+    setOpenCvRuntime: async (payload, options) => {
       capturedPayload = payload;
+      capturedOptions = options;
       return runtime;
     },
   };
   const opencvWorkerClient = {
+    workerCommand: "python opencv-worker.py",
     applyRuntimeConfig: (nextRuntime) => {
       appliedRuntime = nextRuntime;
     },
@@ -332,6 +336,7 @@ test("POST /config/opencv accepts runtime payload and applies worker runtime con
 
   assert.equal(response.status, 200);
   assert.deepEqual(capturedPayload, payloadInput);
+  assert.deepEqual(capturedOptions, { workerConfigured: true });
   assert.deepEqual(appliedRuntime, runtime);
   assert.deepEqual(payload, {
     data: {
@@ -339,6 +344,44 @@ test("POST /config/opencv accepts runtime payload and applies worker runtime con
       opencv: runtime,
     },
   });
+});
+
+test("POST /config/opencv rejects non-disabled mode when no worker is configured", async (t) => {
+  const persisted = [];
+  const configManager = new ConfigManager(buildConfig(), {
+    getRuntimeConfig: () => null,
+    setRuntimeConfig: async (key, value) => {
+      persisted.push({ key, value });
+    },
+  });
+
+  const { server, baseUrl } = await startTestServer({
+    configManager,
+    opencvWorkerClient: {
+      applyRuntimeConfig: () => {
+        throw new Error(
+          "runtime config should not be applied on invalid payload",
+        );
+      },
+    },
+  });
+
+  t.after(() => server.close());
+
+  const response = await fetch(`${baseUrl}/config/opencv`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ mode: "shadow" }),
+  });
+  const payload = await response.json();
+
+  assert.equal(response.status, 422);
+  assert.deepEqual(payload, {
+    error: "OpenCV mode requires OPENCV_WORKER_URL or OPENCV_WORKER_COMMAND.",
+  });
+  assert.deepEqual(persisted, []);
 });
 
 test("handleClipDetected bypasses worker invocation in disabled mode", async () => {

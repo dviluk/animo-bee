@@ -3,13 +3,15 @@ import test from "node:test";
 
 import { ConfigManager } from "../src/services/config-manager.js";
 
-function buildConfig(opencvEnabled = false) {
+function buildConfig(opencvEnabled = false, options = {}) {
   return {
     features: {
       opencvEnabled,
     },
     opencv: {
       enabled: opencvEnabled,
+      workerUrl: options.workerUrl ?? null,
+      workerCommand: options.workerCommand ?? null,
     },
   };
 }
@@ -82,7 +84,9 @@ test("setOpenCvEnabled persists and updates runtime config state", async () => {
 });
 
 test("setOpenCvRuntime persists mode and threshold overrides", async () => {
-  const config = buildConfig(false);
+  const config = buildConfig(false, {
+    workerUrl: "http://127.0.0.1:5002/decision",
+  });
   const persisted = [];
   const queueManager = {
     getRuntimeConfig: () => null,
@@ -122,6 +126,23 @@ test("setOpenCvRuntime persists mode and threshold overrides", async () => {
   assert.equal(config.features.opencvEnabled, true);
   assert.equal(config.opencv.mode, "enforce");
   assert.equal(config.opencv.failOpen, false);
+});
+
+test("setOpenCvRuntime rejects non-disabled mode without worker contract", async () => {
+  const persisted = [];
+  const manager = new ConfigManager(buildConfig(false), {
+    getRuntimeConfig: () => null,
+    setRuntimeConfig: async (key, value) => {
+      persisted.push({ key, value });
+    },
+  });
+
+  await assert.rejects(
+    () => manager.setOpenCvRuntime({ mode: "shadow" }),
+    /OpenCV mode requires OPENCV_WORKER_URL or OPENCV_WORKER_COMMAND/,
+  );
+
+  assert.deepEqual(persisted, []);
 });
 
 test("setOpenCvEnabled rejects non-boolean values", async () => {
