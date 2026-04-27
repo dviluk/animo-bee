@@ -68,6 +68,11 @@ test("runOnce uploads a queued clip and records the attempt", async (t) => {
       currentPath: clipPath,
       sourceCamera: "camera_1",
       checksum: "checksum-11",
+      opencvMode: "shadow",
+      opencvStatus: "completed",
+      opencvDecision: "accept",
+      opencvReason: "roi_motion",
+      opencvScores: { roi_motion_score: 0.88 },
     }),
     getUploadAttemptCount: () => 0,
     markUploading: async (clipId) => ({
@@ -75,6 +80,11 @@ test("runOnce uploads a queued clip and records the attempt", async (t) => {
       currentPath: clipPath,
       sourceCamera: "camera_1",
       checksum: "checksum-11",
+      opencvMode: "shadow",
+      opencvStatus: "completed",
+      opencvDecision: "accept",
+      opencvReason: "roi_motion",
+      opencvScores: { roi_motion_score: 0.88 },
       status: "uploading",
     }),
     recordUploadAttempt: async (_clipId, attempt) => {
@@ -91,6 +101,8 @@ test("runOnce uploads a queued clip and records the attempt", async (t) => {
     buildConfig({
       upload: {
         headers: { authorization: "Bearer test" },
+        externalSourceKey: "edge-cam-01",
+        deviceId: "bee-pi-01",
       },
       paths: {
         processedDir: path.join(runtimeRoot, "processed"),
@@ -120,10 +132,51 @@ test("runOnce uploads a queued clip and records the attempt", async (t) => {
   assert.equal(fetchCall.options.headers["x-animo-source-camera"], "camera_1");
   assert.equal(fetchCall.options.headers["x-animo-checksum"], "checksum-11");
   assert.equal(
+    fetchCall.options.headers["Idempotency-Key"],
+    "edge-cam-01:11:checksum-11",
+  );
+  assert.equal(
     fetchCall.options.headers["x-animo-original-filename"],
     "clip-upload.mp4",
   );
-  assert.equal(fetchCall.options.headers["content-length"], "14");
+  assert.equal(
+    fetchCall.options.body.get("check_type"),
+    "pollination_activity",
+  );
+  assert.equal(fetchCall.options.body.get("domain_profile"), "pollination");
+  assert.equal(fetchCall.options.body.get("media_kind"), "video");
+  assert.equal(fetchCall.options.body.get("source_channel"), "edge_device");
+  assert.equal(
+    fetchCall.options.body.get("processing_mode"),
+    "edge_prefiltered",
+  );
+  assert.equal(fetchCall.options.body.get("backend_processing"), "required");
+  assert.equal(fetchCall.options.body.get("device_id"), "bee-pi-01");
+  assert.equal(fetchCall.options.body.get("camera_id"), "camera_1");
+  assert.equal(
+    fetchCall.options.body.get("external_source_key"),
+    "edge-cam-01",
+  );
+  assert.equal(fetchCall.options.body.get("source_clip_id"), "camera_1:11");
+  assert.equal(
+    fetchCall.options.body.get("idempotency_key"),
+    "edge-cam-01:11:checksum-11",
+  );
+  assert.equal(
+    fetchCall.options.body.get("metadata[edge_prefilter][clip_id]"),
+    "11",
+  );
+  assert.equal(
+    fetchCall.options.body.get("metadata[edge_prefilter][opencv_mode]"),
+    "shadow",
+  );
+  assert.equal(
+    fetchCall.options.body.get("metadata[edge_upload][attempt_number]"),
+    "1",
+  );
+  const uploadedFile = fetchCall.options.body.get("file");
+  assert.equal(uploadedFile.name, "clip-upload.mp4");
+  assert.equal(uploadedFile.type, "video/mp4");
   assert.equal(attempts.length, 1);
   assert.deepEqual(attempts[0], {
     attemptNumber: 1,
@@ -198,6 +251,56 @@ test("runOnce requeues clip when upload fails before max attempts", async (t) =>
   assert.equal(attempts[0].attemptNumber, 1);
   assert.equal(attempts[0].responseStatus, 500);
   assert.match(attempts[0].errorSummary, /Upload failed with HTTP 500/);
+});
+
+test("uploadClip uses raw processing mode when opencv is disabled", async (t) => {
+  const runtimeRoot = await fs.mkdtemp(path.join(os.tmpdir(), "animo-bee-up-"));
+  const clipPath = path.join(runtimeRoot, "clip-raw-mode.mp4");
+
+  await fs.writeFile(clipPath, "raw-mode", "utf8");
+
+  t.after(async () => {
+    await fs.rm(runtimeRoot, { force: true, recursive: true });
+  });
+
+  let fetchCall = null;
+
+  const worker = new UploadWorker(
+    buildConfig({
+      upload: {
+        externalSourceKey: "edge-cam-02",
+      },
+    }),
+    {},
+    {
+      fetch: async (_url, options) => {
+        fetchCall = options;
+        return {
+          ok: true,
+          status: 204,
+        };
+      },
+    },
+  );
+
+  const uploadResult = await worker.uploadClip(
+    {
+      id: 55,
+      currentPath: clipPath,
+      sourceCamera: "camera_3",
+      checksum: "checksum-55",
+      opencvMode: "disabled",
+      opencvStatus: "skipped",
+      opencvDecision: "accept",
+      opencvReason: "opencv_disabled",
+      opencvScores: {},
+    },
+    1,
+  );
+
+  assert.equal(uploadResult.responseStatus, 204);
+  assert.equal(fetchCall.body.get("processing_mode"), "raw");
+  assert.equal(fetchCall.body.get("backend_processing"), "required");
 });
 
 test("processClip marks clip exhausted when max attempts are already reached", async () => {

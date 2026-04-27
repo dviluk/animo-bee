@@ -15,6 +15,9 @@ const DEFAULT_UPLOAD_MAX_ATTEMPTS = 3;
 const DEFAULT_UPLOAD_POLL_INTERVAL_MS = 5000;
 const DEFAULT_UPLOAD_RETRY_DELAY_MS = 30000;
 const DEFAULT_UPLOAD_TIMEOUT_MS = 60000;
+const DEFAULT_UPLOAD_DOMAIN_PROFILE = "pollination";
+const DEFAULT_UPLOAD_CHECK_TYPE = "pollination_activity";
+const DEFAULT_UPLOAD_SOURCE_CHANNEL = "edge_device";
 const DEFAULT_IRRIGATION_TIMEOUT_MS = 10000;
 const DEFAULT_PATHS = {
   camera1: "./runtime/camera_1",
@@ -196,6 +199,15 @@ export function loadConfig() {
         process.env.UPLOAD_HEADERS_JSON,
         "UPLOAD_HEADERS_JSON",
       ),
+      domainProfile:
+        process.env.UPLOAD_DOMAIN_PROFILE ?? DEFAULT_UPLOAD_DOMAIN_PROFILE,
+      checkType: process.env.UPLOAD_CHECK_TYPE ?? DEFAULT_UPLOAD_CHECK_TYPE,
+      sourceChannel:
+        process.env.UPLOAD_SOURCE_CHANNEL ?? DEFAULT_UPLOAD_SOURCE_CHANNEL,
+      externalSourceKey: process.env.UPLOAD_EXTERNAL_SOURCE_KEY ?? null,
+      deviceId: process.env.UPLOAD_DEVICE_ID ?? null,
+      processingMode: process.env.UPLOAD_PROCESSING_MODE ?? null,
+      backendProcessing: process.env.UPLOAD_BACKEND_PROCESSING ?? null,
       maxAttempts: parsePositiveInteger(
         process.env.UPLOAD_MAX_ATTEMPTS,
         DEFAULT_UPLOAD_MAX_ATTEMPTS,

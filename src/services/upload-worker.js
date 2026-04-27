@@ -1,11 +1,17 @@
-import { createReadStream } from "node:fs";
-import fs from "node:fs/promises";
+import { openAsBlob } from "node:fs";
 import path from "node:path";
 
 const DEFAULT_UPLOAD_CONFIG = Object.freeze({
   enabled: false,
   url: null,
   headers: {},
+  domainProfile: "pollination",
+  checkType: "pollination_activity",
+  sourceChannel: "edge_device",
+  externalSourceKey: null,
+  deviceId: null,
+  processingMode: null,
+  backendProcessing: null,
   maxAttempts: 3,
   pollIntervalMs: 5000,
   retryDelayMs: 30000,
@@ -21,6 +27,148 @@ function createAbortSignal(timeoutMs) {
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
   return { controller, timeout };
+}
+
+function inferMediaKind(filePath) {
+  const extension = path.extname(filePath).toLowerCase();
+
+  if ([".mp4", ".mov", ".avi", ".webm"].includes(extension)) {
+    return "video";
+  }
+
+  return "image";
+}
+
+function inferMimeType(filePath) {
+  const extension = path.extname(filePath).toLowerCase();
+  const mimeTypes = {
+    ".avi": "video/x-msvideo",
+    ".gif": "image/gif",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".mov": "video/quicktime",
+    ".mp4": "video/mp4",
+    ".png": "image/png",
+    ".webm": "video/webm",
+    ".webp": "image/webp",
+  };
+
+  return mimeTypes[extension] ?? "application/octet-stream";
+}
+
+function appendFormValue(formData, key, value) {
+  if (value === undefined || value === null || value === "") {
+    return;
+  }
+
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => {
+      appendFormValue(formData, `${key}[${index}]`, item);
+    });
+
+    return;
+  }
+
+  if (typeof value === "object") {
+    Object.entries(value).forEach(([nestedKey, nestedValue]) => {
+      appendFormValue(formData, `${key}[${nestedKey}]`, nestedValue);
+    });
+
+    return;
+  }
+
+  formData.append(key, String(value));
+}
+
+function resolveProcessingMode(config, clip) {
+  if (config.processingMode) {
+    return config.processingMode;
+  }
+
+  return clip.opencvMode === "disabled" ? "raw" : "edge_prefiltered";
+}
+
+function resolveBackendProcessing(config) {
+  return config.backendProcessing ?? "required";
+}
+
+function buildIdempotencyKey(config, clip) {
+  const sourceIdentity =
+    config.externalSourceKey ?? config.deviceId ?? clip.sourceCamera ?? "edge";
+
+  return `${sourceIdentity}:${clip.id}:${clip.checksum ?? "no-checksum"}`;
+}
+
+function buildSourceClipId(clip) {
+  return clip.sourceCamera
+    ? `${clip.sourceCamera}:${clip.id}`
+    : String(clip.id);
+}
+
+function buildEdgeMetadata(clip, processingMode, attemptNumber) {
+  return {
+    edge_prefilter: {
+      clip_id: clip.id,
+      source_camera: clip.sourceCamera,
+      processing_mode: processingMode,
+      opencv_mode: clip.opencvMode,
+      opencv_status: clip.opencvStatus,
+      opencv_decision: clip.opencvDecision,
+      opencv_reason: clip.opencvReason,
+      opencv_error: clip.opencvError,
+      opencv_processed_at: clip.opencvProcessedAt,
+      opencv_scores: clip.opencvScores ?? {},
+    },
+    edge_upload: {
+      attempt_number: attemptNumber,
+      queued_at: clip.queuedAt,
+    },
+  };
+}
+
+async function buildUploadBody(config, clip, attemptNumber) {
+  const mediaKind = inferMediaKind(clip.currentPath);
+  const mimeType = inferMimeType(clip.currentPath);
+  const filename = path.basename(clip.currentPath);
+  const processingMode = resolveProcessingMode(config, clip);
+  const backendProcessing = resolveBackendProcessing(config);
+  const formData = new FormData();
+  const fileBlob = await openAsBlob(clip.currentPath, { type: mimeType });
+
+  formData.append("file", fileBlob, filename);
+  formData.append("check_type", config.checkType);
+  formData.append("domain_profile", config.domainProfile);
+  formData.append("media_kind", mediaKind);
+  formData.append("source_channel", config.sourceChannel);
+  formData.append("processing_mode", processingMode);
+  formData.append("backend_processing", backendProcessing);
+  appendFormValue(formData, "device_id", config.deviceId);
+  appendFormValue(formData, "camera_id", clip.sourceCamera);
+  appendFormValue(formData, "external_source_key", config.externalSourceKey);
+  appendFormValue(formData, "source_clip_id", buildSourceClipId(clip));
+  appendFormValue(formData, "checksum", clip.checksum);
+  appendFormValue(
+    formData,
+    "idempotency_key",
+    buildIdempotencyKey(config, clip),
+  );
+  appendFormValue(
+    formData,
+    "metadata",
+    buildEdgeMetadata(clip, processingMode, attemptNumber),
+  );
+
+  return {
+    body: formData,
+    headers: {
+      "x-animo-clip-id": String(clip.id),
+      "x-animo-source-camera": clip.sourceCamera ?? "",
+      "x-animo-checksum": clip.checksum ?? "",
+      "x-animo-original-filename": filename,
+      "Idempotency-Key": buildIdempotencyKey(config, clip),
+      ...config.headers,
+    },
+  };
 }
 
 export class UploadWorker {
@@ -157,7 +305,7 @@ export class UploadWorker {
     this.inFlightClipId = uploadingClip.id;
 
     try {
-      const uploadResult = await this.uploadClip(uploadingClip);
+      const uploadResult = await this.uploadClip(uploadingClip, attemptNumber);
 
       await this.queueManager.recordUploadAttempt(uploadingClip.id, {
         attemptNumber,
@@ -210,28 +358,23 @@ export class UploadWorker {
     }
   }
 
-  async uploadClip(clip) {
+  async uploadClip(clip, attemptNumber) {
     if (typeof this.fetch !== "function") {
       throw new Error("Fetch API is not available in this runtime.");
     }
 
-    const stats = await fs.stat(clip.currentPath);
     const { controller, timeout } = createAbortSignal(this.config.timeoutMs);
+    const { body, headers } = await buildUploadBody(
+      this.config,
+      clip,
+      attemptNumber,
+    );
 
     try {
       const response = await this.fetch(this.config.url, {
         method: "POST",
-        headers: {
-          "content-type": "application/octet-stream",
-          "content-length": String(stats.size),
-          "x-animo-clip-id": String(clip.id),
-          "x-animo-source-camera": clip.sourceCamera ?? "",
-          "x-animo-checksum": clip.checksum ?? "",
-          "x-animo-original-filename": path.basename(clip.currentPath),
-          ...this.config.headers,
-        },
-        body: createReadStream(clip.currentPath),
-        duplex: "half",
+        headers,
+        body,
         signal: controller.signal,
       });
 
