@@ -1,1 +1,0 @@
-../animo-agents/.github/copilot-instructions.md
