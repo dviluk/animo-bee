@@ -32,7 +32,8 @@ function createAbortSignal(timeoutMs) {
 function inferMediaKind(filePath) {
   const extension = path.extname(filePath).toLowerCase();
 
-  if ([".mp4", ".mov", ".avi", ".webm"].includes(extension)) {
+  // .mkv is motionEye's default movie_codec output — see config/motioneye/*.conf
+  if ([".mkv", ".mp4", ".mov", ".avi", ".webm"].includes(extension)) {
     return "video";
   }
 
@@ -46,6 +47,7 @@ function inferMimeType(filePath) {
     ".gif": "image/gif",
     ".jpg": "image/jpeg",
     ".jpeg": "image/jpeg",
+    ".mkv": "video/x-matroska",
     ".mov": "video/quicktime",
     ".mp4": "video/mp4",
     ".png": "image/png",

@@ -405,3 +405,55 @@ test("processClip honors manual retry budget resets", async (t) => {
     },
   ]);
 });
+
+test("processClip labels motionEye .mkv clips as matroska video", async (t) => {
+  const runtimeRoot = await fs.mkdtemp(path.join(os.tmpdir(), "animo-bee-up-"));
+  const clipPath = path.join(runtimeRoot, "clip-motion.mkv");
+
+  await fs.writeFile(clipPath, "mkv-payload", "utf8");
+
+  t.after(async () => {
+    await fs.rm(runtimeRoot, { force: true, recursive: true });
+  });
+
+  let fetchCall = null;
+
+  const queueManager = {
+    getUploadAttemptBudgetCount: () => 0,
+    getUploadAttemptCount: () => 0,
+    markUploading: async (clipId) => ({
+      id: clipId,
+      currentPath: clipPath,
+      sourceCamera: "camera_1",
+      checksum: "checksum-55",
+      status: "uploading",
+    }),
+    recordUploadAttempt: async () => {},
+    completeUpload: async (clipId) => ({
+      id: clipId,
+      status: "uploaded",
+      currentPath: path.join(runtimeRoot, "processed", "clip-motion.mkv"),
+    }),
+  };
+
+  const worker = new UploadWorker(buildConfig(), queueManager, {
+    fetch: async (url, options) => {
+      fetchCall = { url, options };
+      return { ok: true, status: 201 };
+    },
+  });
+
+  const result = await worker.processClip({
+    id: 55,
+    currentPath: clipPath,
+    sourceCamera: "camera_1",
+    checksum: "checksum-55",
+  });
+
+  assert.equal(result.status, "uploaded");
+  assert.equal(fetchCall.options.body.get("media_kind"), "video");
+
+  const uploadedFile = fetchCall.options.body.get("file");
+  assert.equal(uploadedFile.name, "clip-motion.mkv");
+  assert.equal(uploadedFile.type, "video/x-matroska");
+});
