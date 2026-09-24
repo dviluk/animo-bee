@@ -171,6 +171,15 @@ Rules enforced by the loader:
 - relative paths resolve against the current working directory
 - absolute paths are normalized and preserved
 
+### Uploading to data-hub: one tenant per token
+
+When `UPLOAD_URL` points at data-hub's `/api/vision/media`, `UPLOAD_HEADERS_JSON` carries the
+`Authorization: Bearer <token>` data-hub authenticates. The bee sends no organization or company id, so
+data-hub takes both from that token's grant (`VisionMediaController.php:478-485`). **Mint the token for
+exactly one organization and one company.** A token whose grant spans several companies is refused with
+403; data-hub never picks one for you. Until the bee carries a tenant claim of its own (deferred, see
+`animo-agents/docs/tasks/vision-fixpack/OWNER-DECISIONS.md` Decision 16), one device serves one company.
+
 ## Runtime Directory Guarantees
 
 Before the server starts, `ensureRuntimeDirectories(config)` creates:
